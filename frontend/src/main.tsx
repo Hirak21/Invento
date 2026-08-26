@@ -4,13 +4,16 @@ import { BrowserRouter } from 'react-router-dom'
 
 import App from './App.tsx'
 import { AuthProvider } from './hooks/useAuth.tsx'
+import { BusinessUnitProvider } from './hooks/useBusinessUnit.tsx'
 import './index.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
       <AuthProvider>
-        <App />
+        <BusinessUnitProvider>
+          <App />
+        </BusinessUnitProvider>
       </AuthProvider>
     </BrowserRouter>
   </StrictMode>,

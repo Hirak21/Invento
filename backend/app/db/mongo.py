@@ -26,6 +26,15 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     await db.users.create_index("username", unique=True)
     await db.audit_logs.create_index([("created_at", -1)])
     await db.audit_logs.create_index("entity_type")
+    # SKU unique only when present (nulls exempt via partial filter).
+    await db.inventory_items.create_index(
+        "sku",
+        unique=True,
+        partialFilterExpression={"sku": {"$type": "string"}},
+    )
+    await db.inventory_items.create_index([("business_unit_id", 1), ("name", 1)])
+    await db.inventory_movements.create_index([("item_id", 1), ("created_at", -1)])
+    await db.inventory_movements.create_index([("business_unit_id", 1), ("created_at", -1)])
 
 
 def get_db(request_db_name: str | None = None) -> AsyncIOMotorDatabase:

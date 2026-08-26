@@ -42,3 +42,6 @@ async def require_owner(user: CurrentUser) -> dict:
     if UserRole(user["role"]) != UserRole.OWNER:
         raise ForbiddenError("Only owners can perform this action.")
     return user
+
+
+OwnerUser = Annotated[dict, Depends(require_owner)]

@@ -4,7 +4,9 @@ import type { ReactElement } from 'react'
 import { AppShell } from '@/layouts/AppShell'
 import { useAuth } from '@/hooks/useAuth'
 import { DashboardPage } from '@/pages/DashboardPage'
+import { InventoryPage } from '@/pages/InventoryPage'
 import { LoginPage } from '@/pages/LoginPage'
+import { SettingsPage } from '@/pages/SettingsPage'
 import { PlaceholderPage } from '@/pages/PlaceholderPage'
 
 function RequireAuth({ children }: { children: ReactElement }) {
@@ -35,6 +37,8 @@ export default function App() {
       >
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/inventory" element={<InventoryPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
         <Route
           path="/sales"
           element={<PlaceholderPage title="Sales" message="No sales recorded yet. Recording sales will appear here." />}
@@ -42,10 +46,6 @@ export default function App() {
         <Route
           path="/purchases"
           element={<PlaceholderPage title="Purchases" message="No purchases found. Record your first purchase to see it here." />}
-        />
-        <Route
-          path="/inventory"
-          element={<PlaceholderPage title="Inventory" message="No inventory items yet. Add items in the Inventory section." />}
         />
         <Route
           path="/wastage"
@@ -58,10 +58,6 @@ export default function App() {
         <Route
           path="/reports"
           element={<PlaceholderPage title="Reports" message="Reports will be available once transactions are recorded." />}
-        />
-        <Route
-          path="/settings"
-          element={<PlaceholderPage title="Settings" message="Settings will appear here." />}
         />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

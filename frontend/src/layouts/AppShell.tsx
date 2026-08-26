@@ -1,7 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 
+import { Select } from '@/components/ui/Select'
 import { useAuth } from '@/hooks/useAuth'
+import { useBusinessUnit } from '@/hooks/useBusinessUnit'
+import { listBusinessUnits } from '@/services/masterData'
+import type { BusinessUnit } from '@/types/master'
 import { cn } from '@/utils/cn'
 
 const NAV_ITEMS = [
@@ -41,13 +45,39 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
 
 export function AppShell() {
   const { user, logout } = useAuth()
+  const { selectedBuId, setSelectedBuId } = useBusinessUnit()
   const navigate = useNavigate()
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [units, setUnits] = useState<BusinessUnit[]>([])
+
+  useEffect(() => {
+    void listBusinessUnits()
+      .then(setUnits)
+      .catch(() => undefined)
+  }, [])
 
   function handleLogout() {
     logout()
+    setSelectedBuId(null)
     navigate('/login', { replace: true })
   }
+
+  const unitSelector = (
+    <Select
+      label=""
+      value={selectedBuId ?? ''}
+      onChange={(e) => setSelectedBuId(e.target.value || null)}
+      className="!py-1.5 text-sm"
+      aria-label="Filter by business unit"
+    >
+      <option value="">All units</option>
+      {units.map((u) => (
+        <option key={u.id} value={u.id}>
+          {u.name}
+        </option>
+      ))}
+    </Select>
+  )
 
   return (
     <div className="min-h-dvh">
@@ -102,10 +132,7 @@ export function AppShell() {
         <div className="flex min-w-0 flex-1 flex-col">
           {/* Desktop topbar */}
           <header className="hidden items-center justify-between border-b border-slate-200 bg-white px-8 py-3 md:flex">
-            <div className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-500">
-              <span className="font-medium text-slate-700">All units</span>
-              <span className="text-xs">(Restaurant · Shop)</span>
-            </div>
+            <div className="w-48">{unitSelector}</div>
             <UserMenuButton username={user?.username ?? ''} onLogout={handleLogout} />
           </header>
 

@@ -20,6 +20,9 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = ["http://localhost:5173"]
 
+    # Visible business rule: max |delta| a staff user may adjust in one correction.
+    staff_adjustment_limit: int = 10
+
 
 @lru_cache
 def get_settings() -> Settings:

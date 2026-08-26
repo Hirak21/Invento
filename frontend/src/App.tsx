@@ -9,6 +9,7 @@ import { LoginPage } from '@/pages/LoginPage'
 import { PurchasesPage } from '@/pages/PurchasesPage'
 import { SalesPage } from '@/pages/SalesPage'
 import { SettingsPage } from '@/pages/SettingsPage'
+import { WastagePage } from '@/pages/WastagePage'
 import { PlaceholderPage } from '@/pages/PlaceholderPage'
 
 function RequireAuth({ children }: { children: ReactElement }) {
@@ -48,7 +49,7 @@ export default function App() {
         />
         <Route
           path="/wastage"
-          element={<PlaceholderPage title="Wastage" message="No wastage recorded for this period." />}
+          element={<WastagePage />}
         />
         <Route
           path="/expenses"

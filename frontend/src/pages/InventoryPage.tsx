@@ -196,6 +196,7 @@ export function InventoryPage() {
           setEditing(item)
           setFormOpen(true)
         }}
+        onChanged={() => void load(search)}
         businessUnits={businessUnits}
         categories={categories}
         suppliers={suppliers}

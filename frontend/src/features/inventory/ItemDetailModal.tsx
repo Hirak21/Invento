@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { Badge } from '@/components/ui/Select'
+import { AdjustmentModal } from '@/features/inventory/AdjustmentModal'
 import { EmptyState } from '@/components/ui/Card'
 import { listItemMovements } from '@/services/masterData'
 import {
@@ -17,6 +18,7 @@ interface ItemDetailModalProps {
   item: InventoryItem | null
   onClose: () => void
   onEdit?: (item: InventoryItem) => void
+  onChanged?: () => void
   businessUnits: BusinessUnit[]
   categories: Category[]
   suppliers: Supplier[]
@@ -33,12 +35,14 @@ export function ItemDetailModal({
   item,
   onClose,
   onEdit,
+  onChanged,
   businessUnits,
   categories,
   suppliers,
 }: ItemDetailModalProps) {
   const [movements, setMovements] = useState<Movement[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [adjustOpen, setAdjustOpen] = useState(false)
 
   useEffect(() => {
     if (!item) return
@@ -60,7 +64,10 @@ export function ItemDetailModal({
     <Modal open title={item.name} onClose={onClose} wide>
       <div className="space-y-5">
         {onEdit && (
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setAdjustOpen(true)}>
+              Adjust stock
+            </Button>
             <Button size="sm" variant="secondary" onClick={() => onEdit(item)}>
               Edit item
             </Button>
@@ -125,6 +132,16 @@ export function ItemDetailModal({
           )}
         </div>
       </div>
+
+      <AdjustmentModal
+        item={adjustOpen ? item : null}
+        onClose={() => setAdjustOpen(false)}
+        onSaved={() => {
+          setAdjustOpen(false)
+          onClose()
+          onChanged?.()
+        }}
+      />
     </Modal>
   )
 }

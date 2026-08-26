@@ -4,7 +4,7 @@ import type { InputHTMLAttributes, ReactNode } from 'react'
 import { cn } from '@/utils/cn'
 
 interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'id'> {
-  label: string
+  label?: string
   error?: string | null
   hint?: string
   trailing?: ReactNode
@@ -15,9 +15,11 @@ export function Input({ label, error, hint, trailing, className, ...rest }: Inpu
   const errorId = `${id}-error`
   return (
     <div className="w-full">
-      <label htmlFor={id} className="mb-1 block text-sm font-medium text-slate-700">
-        {label}
-      </label>
+      {label && (
+        <label htmlFor={id} className="mb-1 block text-sm font-medium text-slate-700">
+          {label}
+        </label>
+      )}
       <div className="relative">
         <input
           id={id}

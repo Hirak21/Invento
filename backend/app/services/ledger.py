@@ -5,15 +5,22 @@ from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorClientSession, AsyncIOMotorDatabase
 
 from app.models.enums import MovementType
-from app.models.user import utc_now
 
 
-def oid(document_id: str) -> ObjectId:
-    """Convert a hex id string to ObjectId, raising a clean error on garbage."""
+def parse_oid(value: str) -> ObjectId:
+    """Convert hex id to ObjectId; ValueError on garbage."""
     try:
-        return ObjectId(document_id)
+        return ObjectId(value)
     except Exception:
         raise ValueError("Invalid id format.") from None
+
+
+# Backwards-compatible alias used across services/routers.
+oid = parse_oid
+
+
+def is_oid(value: str) -> bool:
+    return ObjectId.is_valid(value)
 
 
 async def record_movement(
@@ -47,6 +54,3 @@ async def record_movement(
     }
     result = await db.inventory_movements.insert_one(doc, session=session)
     return str(result.inserted_id)
-
-
-__all__ = ["oid", "record_movement", "utc_now"]

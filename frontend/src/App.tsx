@@ -6,6 +6,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { InventoryPage } from '@/pages/InventoryPage'
 import { LoginPage } from '@/pages/LoginPage'
+import { PurchasesPage } from '@/pages/PurchasesPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { PlaceholderPage } from '@/pages/PlaceholderPage'
 
@@ -38,14 +39,11 @@ export default function App() {
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/inventory" element={<InventoryPage />} />
+        <Route path="/purchases" element={<PurchasesPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route
           path="/sales"
           element={<PlaceholderPage title="Sales" message="No sales recorded yet. Recording sales will appear here." />}
-        />
-        <Route
-          path="/purchases"
-          element={<PlaceholderPage title="Purchases" message="No purchases found. Record your first purchase to see it here." />}
         />
         <Route
           path="/wastage"

@@ -9,6 +9,7 @@ import { LoginPage } from '@/pages/LoginPage'
 import { PurchasesPage } from '@/pages/PurchasesPage'
 import { SalesPage } from '@/pages/SalesPage'
 import { SettingsPage } from '@/pages/SettingsPage'
+import { ExpensesPage } from '@/pages/ExpensesPage'
 import { WastagePage } from '@/pages/WastagePage'
 import { PlaceholderPage } from '@/pages/PlaceholderPage'
 
@@ -53,7 +54,7 @@ export default function App() {
         />
         <Route
           path="/expenses"
-          element={<PlaceholderPage title="Expenses" message="No expenses recorded for this period." />}
+          element={<ExpensesPage />}
         />
         <Route
           path="/reports"

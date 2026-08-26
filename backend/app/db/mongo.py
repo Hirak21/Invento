@@ -45,6 +45,8 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     await db.wastage.create_index([("business_unit_id", 1), ("wasted_at", -1)])
     await db.stock_adjustments.create_index("idempotency_key", unique=True, sparse=True)
     await db.stock_adjustments.create_index([("business_unit_id", 1), ("adjusted_at", -1)])
+    await db.expenses.create_index("idempotency_key", unique=True, sparse=True)
+    await db.expenses.create_index([("business_unit_id", 1), ("spent_at", -1)])
 
 
 def get_db(request_db_name: str | None = None) -> AsyncIOMotorDatabase:

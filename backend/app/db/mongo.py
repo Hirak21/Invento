@@ -38,6 +38,9 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     await db.purchases.create_index("idempotency_key", unique=True, sparse=True)
     await db.purchases.create_index([("business_unit_id", 1), ("purchased_at", -1)])
     await db.purchases.create_index("purchase_number")
+    await db.sales.create_index("idempotency_key", unique=True, sparse=True)
+    await db.sales.create_index([("business_unit_id", 1), ("sold_at", -1)])
+    await db.sales.create_index("sale_number")
 
 
 def get_db(request_db_name: str | None = None) -> AsyncIOMotorDatabase:

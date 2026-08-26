@@ -7,6 +7,7 @@ import { DashboardPage } from '@/pages/DashboardPage'
 import { InventoryPage } from '@/pages/InventoryPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { PurchasesPage } from '@/pages/PurchasesPage'
+import { SalesPage } from '@/pages/SalesPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { PlaceholderPage } from '@/pages/PlaceholderPage'
 
@@ -43,7 +44,7 @@ export default function App() {
         <Route path="/settings" element={<SettingsPage />} />
         <Route
           path="/sales"
-          element={<PlaceholderPage title="Sales" message="No sales recorded yet. Recording sales will appear here." />}
+          element={<SalesPage />}
         />
         <Route
           path="/wastage"

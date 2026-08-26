@@ -1,0 +1,89 @@
+from datetime import datetime
+from enum import Enum
+
+from pydantic import BaseModel, Field
+
+from app.utils.money import MoneyAmount
+
+
+class SalePaymentMethod(str, Enum):
+    CASH = "cash"
+    CARD = "card"
+    UPI = "upi"
+    BANK_TRANSFER = "bank_transfer"
+    CREDIT = "credit"
+
+
+class SaleLineIn(BaseModel):
+    item_id: str
+    quantity: int = Field(gt=0)
+    unit_price: MoneyAmount
+
+
+class SaleLineOut(BaseModel):
+    item_id: str
+    item_name: str
+    quantity: int
+    unit: str
+    unit_price: str
+    unit_cost: str | None
+    line_total: str
+
+
+class SaleCreate(BaseModel):
+    business_unit_id: str
+    items: list[SaleLineIn] = Field(min_length=1)
+    discount: MoneyAmount | None = None
+    payment_method: SalePaymentMethod = SalePaymentMethod.CASH
+    reference_number: str | None = Field(default=None, max_length=60)
+    notes: str | None = Field(default=None, max_length=500)
+    date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    idempotency_key: str = Field(min_length=8, max_length=64)
+
+
+class SaleOut(BaseModel):
+    id: str
+    sale_number: str
+    business_unit_id: str
+    items: list[SaleLineOut]
+    subtotal: str
+    discount: str
+    total_amount: str
+    payment_method: SalePaymentMethod
+    reference_number: str | None
+    notes: str | None
+    sold_at: datetime
+    created_by_username: str | None
+
+
+class SaleListResponse(BaseModel):
+    sales: list[SaleOut]
+    total: int
+
+
+def sale_out_from_doc(doc: dict) -> SaleOut:
+    return SaleOut(
+        id=str(doc["_id"]),
+        sale_number=doc["sale_number"],
+        business_unit_id=doc["business_unit_id"],
+        items=[
+            SaleLineOut(
+                item_id=line["item_id"],
+                item_name=line["item_name"],
+                quantity=line["quantity"],
+                unit=line["unit"],
+                unit_price=line["unit_price"],
+                unit_cost=line.get("unit_cost"),
+                line_total=line["line_total"],
+            )
+            for line in doc["items"]
+        ],
+        subtotal=doc["subtotal"],
+        discount=doc.get("discount", "0.00"),
+        total_amount=doc["total_amount"],
+        payment_method=SalePaymentMethod(doc["payment_method"]),
+        reference_number=doc.get("reference_number"),
+        notes=doc.get("notes"),
+        sold_at=doc["sold_at"],
+        created_by_username=doc.get("created_by_username"),
+    )

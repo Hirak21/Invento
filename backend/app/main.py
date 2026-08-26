@@ -11,6 +11,7 @@ from app.routers import catalog as catalog_router
 from app.routers import inventory as inventory_router
 from app.routers import meta as meta_router
 from app.routers import purchases as purchases_router
+from app.routers import sales as sales_router
 from app.utils.errors import register_exception_handlers
 
 
@@ -46,6 +47,7 @@ def create_app() -> FastAPI:
     app.include_router(catalog_router.router, prefix="/api")
     app.include_router(inventory_router.router, prefix="/api")
     app.include_router(purchases_router.router, prefix="/api")
+    app.include_router(sales_router.router, prefix="/api")
     app.include_router(meta_router.router, prefix="/api")
 
     @app.get("/api/health", tags=["health"])

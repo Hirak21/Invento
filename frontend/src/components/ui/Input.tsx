@@ -1,5 +1,5 @@
 import { useId } from 'react'
-import type { InputHTMLAttributes, ReactNode } from 'react'
+import type { InputHTMLAttributes, ReactNode, Ref } from 'react'
 
 import { cn } from '@/utils/cn'
 
@@ -8,9 +8,10 @@ interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'id'> {
   error?: string | null
   hint?: string
   trailing?: ReactNode
+  ref?: Ref<HTMLInputElement>
 }
 
-export function Input({ label, error, hint, trailing, className, ...rest }: InputProps) {
+export function Input({ label, error, hint, trailing, className, ref, ...rest }: InputProps) {
   const id = useId()
   const errorId = `${id}-error`
   return (
@@ -23,6 +24,7 @@ export function Input({ label, error, hint, trailing, className, ...rest }: Inpu
       <div className="relative">
         <input
           id={id}
+          ref={ref}
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? errorId : undefined}
           className={cn(

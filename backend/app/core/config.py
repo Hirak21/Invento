@@ -18,7 +18,9 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 12
 
-    cors_origins: list[str] = ["http://localhost:5173"]
+    # Plain comma-separated string in env (e.g. "https://a.web.app,https://b.web.app").
+    # Parsed into a list in main.py. Avoids fragile JSON-in-env-var parsing.
+    cors_origins: str = "http://localhost:5173"
 
     # Visible business rule: max |delta| a staff user may adjust in one correction.
     staff_adjustment_limit: int = 10

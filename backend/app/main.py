@@ -15,6 +15,7 @@ from app.routers import sales as sales_router
 from app.routers import wastage as wastage_router
 from app.routers import expenses as expenses_router
 from app.routers import dashboard as dashboard_router
+from app.routers import reports as reports_router
 from app.utils.errors import register_exception_handlers
 
 
@@ -54,6 +55,7 @@ def create_app() -> FastAPI:
     app.include_router(wastage_router.router, prefix="/api")
     app.include_router(expenses_router.router, prefix="/api")
     app.include_router(dashboard_router.router, prefix="/api")
+    app.include_router(reports_router.router, prefix="/api")
     app.include_router(meta_router.router, prefix="/api")
 
     @app.get("/api/health", tags=["health"])

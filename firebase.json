@@ -1,0 +1,16 @@
+{
+  "hosting": [
+    {
+      "target": "invento-lite",
+      "public": "frontend/dist",
+      "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+      "rewrites": [{ "source": "/api/**", "destination": "https://REPLACE_WITH_YOUR_RENDER_URL/api/**" }],
+      "headers": [
+        {
+          "source": "**",
+          "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+        }
+      ]
+    }
+  ]
+}

@@ -1,4 +1,5 @@
-const BASE = '/api'
+const RAW_BASE = import.meta.env.VITE_API_BASE as string | undefined
+const BASE = RAW_BASE && RAW_BASE.length > 0 ? RAW_BASE : '/api'
 export const TOKEN_KEY = 'invento_token'
 
 export class ApiError extends Error {

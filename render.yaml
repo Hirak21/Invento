@@ -1,0 +1,28 @@
+# Render deploy config (free tier web service).
+# Usage: connect this GitHub repo in Render, or run `render blueprint launch`.
+# The free instance sleeps after 15 min idle — acceptable for an MVP client tool.
+services:
+  - type: web
+    name: invento-lite-backend
+    runtime: python
+    plan: free
+    region: oregon        # pick what's near your client; oregon is fine for INR tools
+    branch: main
+    rootDir: backend
+    pythonVersion: "3.13"
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /api/health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: MONGO_URI
+        sync: false          # set in Render dashboard: your Atlas M0 connection string
+      - key: MONGO_DB
+        value: invento
+      - key: JWT_SECRET
+        generateValue: true  # Render generates a strong secret; copy it, never reuse dev
+      - key: CORS_ORIGINS
+        value: "https://invento-lite.web.app,https://invento-lite.firebaseapp.com"
+      - key: PORT
+        value: "10000"

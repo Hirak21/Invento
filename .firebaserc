@@ -1,9 +1,9 @@
 {
   "projects": {
-    "default": "REPLACE_WITH_YOUR_FIREBASE_PROJECT_ID"
+    "default": "invento-lite"
   },
   "targets": {
-    "REPLACE_WITH_YOUR_FIREBASE_PROJECT_ID": {
+    "invento-lite": {
       "hosting": { "invento-lite": ["invento-lite"] }
     }
   }

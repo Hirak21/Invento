@@ -36,9 +36,23 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
+    # Build the CORS allow-list. We always include the deployed Firebase hosts
+    # and local dev so the app works even if the CORS_ORIGINS env var is empty
+    # or missing in the host (an empty env value otherwise overrides the default
+    # and leaves allow_origins = [], which blocks every browser request).
+    raw = (settings.cors_origins or "").strip()
+    origins = [o.strip() for o in raw.split(",") if o.strip()] if raw else []
+    for d in (
+        "https://invento-lite.web.app",
+        "https://invento-lite.firebaseapp.com",
+        "http://localhost:5173",
+    ):
+        if d not in origins:
+            origins.append(d)
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+        allow_origins=origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

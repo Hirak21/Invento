@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { Badge } from '@/components/ui/Select'
+import { Button } from '@/components/ui/Button'
 import { Card, EmptyState } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
+import { SaleFormModal } from '@/features/sales/SaleFormModal'
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
+import { listBusinessUnits } from '@/services/masterData'
+import type { BusinessUnit } from '@/types/master'
 import { fetchSummary } from '@/services/dashboard'
 import type { DashboardSummary, Period } from '@/services/dashboard'
 import { formatMoney } from '@/types/inventory'
@@ -54,6 +58,8 @@ export function DashboardPage() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [businessUnits, setBusinessUnits] = useState<BusinessUnit[]>([])
+  const [saleModalOpen, setSaleModalOpen] = useState(false)
 
   const load = useCallback(async () => {
     if (period === 'custom' && (!customFrom || !customTo)) {
@@ -79,8 +85,11 @@ export function DashboardPage() {
 
   useEffect(() => {
     void load()
-    // Reload when BU changes too.
   }, [load, selectedBuId])
+
+  useEffect(() => {
+    void listBusinessUnits().then(setBusinessUnits).catch(() => undefined)
+  }, [])
 
   const maxTrend = summary
     ? Math.max(...summary.sales_trend.map((point) => Number(point.total)), 1)
@@ -88,6 +97,7 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      {/* Header: greeting + period tabs + quick-add button */}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">
@@ -115,6 +125,19 @@ export function DashboardPage() {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Quick action: + New Sale — always visible, top-right area on mobile too */}
+      <div className="flex justify-end">
+        <Button
+          onClick={() => {
+            setSaleModalOpen(true)
+          }}
+          size="sm"
+          className="shadow-sm"
+        >
+          + New Sale
+        </Button>
       </div>
 
       {period === 'custom' && (
@@ -290,6 +313,17 @@ export function DashboardPage() {
           </Card>
         </>
       )}
+
+      {/* Sale form modal — opens from dashboard + button */}
+      <SaleFormModal
+        open={saleModalOpen}
+        onClose={() => setSaleModalOpen(false)}
+        onSaved={() => {
+          setSaleModalOpen(false)
+          void load()
+        }}
+        businessUnits={businessUnits}
+      />
     </div>
   )
 }

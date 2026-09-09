@@ -73,6 +73,12 @@ export function ItemFormModal({
     setServerError(null)
   }, [open, editing, businessUnits])
 
+  // When business unit changes, we may need to reload categories
+  useEffect(() => {
+    if (!open || !businessUnitId) return
+    void listCategories().then(setCategories).catch(() => undefined)
+  }, [open, businessUnitId])
+
   function validate(): boolean {
     const next: Record<string, string> = {}
     if (!name.trim()) next.name = 'Name is required.'
@@ -98,7 +104,9 @@ export function ItemFormModal({
           name: name.trim(),
           sku: sku.trim() || undefined,
           category_id: categoryId,
+          business_unit_id: businessUnitId,
           item_type: itemType,
+          base_unit: baseUnit,
           purchase_price: purchasePrice,
           selling_price: sellingPrice || null,
           min_stock_level: Number(minStockLevel),
@@ -140,7 +148,6 @@ export function ItemFormModal({
           label="Business unit"
           value={businessUnitId}
           onChange={(e) => setBusinessUnitId(e.target.value)}
-          disabled={!!editing}
           error={errors.businessUnitId}
         >
           <option value="">Select…</option>
@@ -174,8 +181,7 @@ export function ItemFormModal({
           label="Base unit"
           value={baseUnit}
           onChange={(e) => setBaseUnit(e.target.value)}
-          disabled={!!editing}
-          hint={editing ? 'Unit cannot change after creation.' : 'e.g. pcs, kg, litre'}
+          hint={editing ? 'Changing the unit does not convert existing stock.' : 'e.g. pcs, kg, litre'}
         >
           {UNITS.map((u) => (
             <option key={u} value={u}>

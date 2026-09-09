@@ -25,7 +25,9 @@ class ItemUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     sku: str | None = Field(default=None, max_length=40)
     category_id: str | None = None
+    business_unit_id: str | None = None
     item_type: ItemType | None = None
+    base_unit: Unit | None = None
     purchase_price: MoneyAmount | None = None
     selling_price: MoneyAmount | None = None
     min_stock_level: int | None = Field(default=None, ge=0)

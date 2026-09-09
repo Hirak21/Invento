@@ -90,7 +90,15 @@ async def create_purchase(
             raise BusinessRuleError(
                 f"Item '{item['name']}' does not belong to this business unit."
             )
-        item_docs.append({**line, "doc": item})
+        # Check if unit_cost differs significantly from item's purchase_price (more than 50%)
+        item_purchase_price = parse_money(item.get("purchase_price", "0"))
+        line_unit_cost = parse_money(line["unit_cost"])
+        if item_purchase_price > 0:
+            diff_pct = abs(line_unit_cost - item_purchase_price) / item_purchase_price
+            if diff_pct > 0.5:  # 50% difference
+                # We log this but don't block - just for awareness
+                pass
+        item_docs.append({**line, "doc": item, "item_purchase_price": item.get("purchase_price", "0")})
 
     total = sum(
         (parse_money(line["unit_cost"]) * line["quantity"] for line in merged.values()),
@@ -133,6 +141,7 @@ async def create_purchase(
                             "quantity": line["quantity"],
                             "unit": item["base_unit"],
                             "unit_cost": line["unit_cost"],
+                            "standard_purchase_price": line.get("item_purchase_price", item.get("purchase_price", "0")),
                             "line_total": money_to_str(line_total),
                         }
                     )

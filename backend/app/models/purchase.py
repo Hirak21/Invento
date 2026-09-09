@@ -44,6 +44,7 @@ class PurchaseLineOut(BaseModel):
     quantity: int
     unit: str
     unit_cost: str
+    standard_purchase_price: str | None = None
     line_total: str
 
 
@@ -77,6 +78,7 @@ def purchase_out_from_doc(doc: dict) -> PurchaseOut:
                 quantity=line["quantity"],
                 unit=line["unit"],
                 unit_cost=line["unit_cost"],
+                standard_purchase_price=line.get("standard_purchase_price"),
                 line_total=line["line_total"],
             )
             for line in doc["items"]

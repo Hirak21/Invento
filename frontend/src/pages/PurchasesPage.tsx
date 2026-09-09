@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Badge } from '@/components/ui/Select'
 import { PurchaseFormModal } from '@/features/purchases/PurchaseFormModal'
+import { PurchaseDetailModal } from '@/features/purchases/PurchaseDetailModal'
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
 import { listBusinessUnits, listSuppliers } from '@/services/masterData'
 import { listPurchases } from '@/services/purchases'
@@ -33,6 +34,7 @@ export function PurchasesPage() {
   const [error, setError] = useState<string | null>(null)
   const [formOpen, setFormOpen] = useState(false)
   const [successNumber, setSuccessNumber] = useState<string | null>(null)
+  const [detailPurchase, setDetailPurchase] = useState<Purchase | null>(null)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [supplierFilter, setSupplierFilter] = useState('')
@@ -137,7 +139,11 @@ export function PurchasesPage() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {purchases.map((purchase) => (
-                <tr key={purchase.id} className="transition-colors hover:bg-indigo-50/40">
+                <tr
+                  key={purchase.id}
+                  className="transition-colors hover:bg-indigo-50/40 cursor-pointer"
+                  onClick={() => setDetailPurchase(purchase)}
+                >
                   <td className="px-4 py-3">
                     <span className="font-medium text-slate-900">{purchase.purchase_number}</span>
                     {purchase.reference_number && (
@@ -175,6 +181,12 @@ export function PurchasesPage() {
           void load()
         }}
         businessUnits={businessUnits}
+      />
+      <PurchaseDetailModal
+        purchase={detailPurchase}
+        onClose={() => setDetailPurchase(null)}
+        businessUnits={businessUnits}
+        suppliers={suppliers}
       />
     </div>
   )

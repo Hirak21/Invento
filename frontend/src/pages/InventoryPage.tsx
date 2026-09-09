@@ -29,6 +29,7 @@ export function InventoryPage() {
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [supplierFilter, setSupplierFilter] = useState('')
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<InventoryItem | null>(null)
@@ -44,6 +45,7 @@ export function InventoryPage() {
         const res = await listItems({
           business_unit_id: selectedBuId ?? undefined,
           category_id: categoryFilter || undefined,
+          supplier_id: supplierFilter || undefined,
           status: statusFilter || undefined,
           search: searchText || undefined,
         })
@@ -55,7 +57,7 @@ export function InventoryPage() {
         setLoading(false)
       }
     },
-    [selectedBuId, categoryFilter, statusFilter],
+    [selectedBuId, categoryFilter, statusFilter, supplierFilter],
   )
 
   useEffect(() => {
@@ -97,7 +99,7 @@ export function InventoryPage() {
         )}
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
         <Input label="Search" value={search} onChange={(e) => onSearchChange(e.target.value)} placeholder="Name or SKU…" />
         <FilterSelect
           label="Category"
@@ -108,6 +110,18 @@ export function InventoryPage() {
           {categories.map((c) => (
             <option key={c.id} value={c.id}>
               {c.name}
+            </option>
+          ))}
+        </FilterSelect>
+        <FilterSelect
+          label="Supplier"
+          value={supplierFilter}
+          onChange={(e) => setSupplierFilter(e.target.value)}
+        >
+          <option value="">All suppliers</option>
+          {suppliers.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
             </option>
           ))}
         </FilterSelect>
@@ -133,16 +147,18 @@ export function InventoryPage() {
         </div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-          <table className="w-full min-w-[720px] text-left text-sm">
+          <table className="w-full min-w-[880px] text-left text-sm">
             <thead>
               <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-400">
                 <th className="px-4 py-3 font-medium">Item</th>
+                <th className="px-4 py-3 font-medium">Supplier</th>
                 <th className="px-4 py-3 font-medium">Unit</th>
                 <th className="px-4 py-3 text-right font-medium">Current</th>
                 <th className="px-4 py-3 text-right font-medium">Min</th>
                 <th className="px-4 py-3 text-right font-medium">Buy price</th>
                 <th className="px-4 py-3 text-right font-medium">Stock value</th>
                 <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -161,6 +177,11 @@ export function InventoryPage() {
                       {item.sku ? ` · ${item.sku}` : ''}
                     </span>
                   </td>
+                  <td className="px-4 py-3 text-slate-600">
+                    {item.supplier_id
+                      ? suppliers.find((s) => s.id === item.supplier_id)?.name ?? '—'
+                      : '—'}
+                  </td>
                   <td className="px-4 py-3 text-slate-600">{item.base_unit}</td>
                   <td className="px-4 py-3 text-right font-semibold text-slate-900">{item.current_stock}</td>
                   <td className="px-4 py-3 text-right text-slate-500">{item.min_stock_level}</td>
@@ -170,6 +191,18 @@ export function InventoryPage() {
                   </td>
                   <td className="px-4 py-3">
                     <Badge tone={item.status}>{item.status}</Badge>
+                  </td>
+                  <td className="px-4 py-3">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setDetailItem(item)
+                      }}
+                    >
+                      View
+                    </Button>
                   </td>
                 </tr>
               ))}

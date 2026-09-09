@@ -178,45 +178,54 @@ export function PurchaseFormModal({
 
         <div className="space-y-2">
           <span className="block text-sm font-medium text-slate-700">Items</span>
-          {lines.map((line, index) => (
-            <div key={index} className="flex flex-col gap-2 rounded-lg border border-slate-200 p-3 sm:flex-row sm:items-end">
-              <div className="min-w-0 flex-1">
-                <Select label={index === 0 ? 'Item' : undefined} value={line.item_id} onChange={(e) => onItemPicked(index, e.target.value)}>
-                  <option value="">Select item…</option>
-                  {items.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name} ({item.base_unit})
-                    </option>
-                  ))}
-                </Select>
+          {lines.map((line, index) => {
+            const selectedItem = items.find((i) => i.id === line.item_id)
+            return (
+              <div key={index} className="flex flex-col gap-2 rounded-lg border border-slate-200 p-3 sm:flex-row sm:items-end">
+                <div className="min-w-0 flex-1">
+                  <Select label={index === 0 ? 'Item' : undefined} value={line.item_id} onChange={(e) => onItemPicked(index, e.target.value)}>
+                    <option value="">Select item…</option>
+                    {items.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name} ({item.base_unit}) — Stock: {item.current_stock} {item.base_unit} · ₹{Number(item.purchase_price).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                <div className="w-full sm:w-24">
+                  <Input
+                    label={index === 0 ? 'Qty' : undefined}
+                    value={line.quantity}
+                    onChange={(e) => updateLine(index, { quantity: e.target.value })}
+                    inputMode="numeric"
+                  />
+                </div>
+                <div className="w-full sm:w-28">
+                  <Input
+                    label={index === 0 ? 'Unit cost ₹' : undefined}
+                    value={line.unit_cost}
+                    onChange={(e) => updateLine(index, { unit_cost: e.target.value })}
+                    inputMode="decimal"
+                    placeholder={selectedItem ? Number(selectedItem.purchase_price).toLocaleString('en-IN', { minimumFractionDigits: 2 }) : '0.00'}
+                  />
+                </div>
+                {selectedItem && (
+                  <div className="w-full sm:w-40 text-sm text-slate-500 pt-1">
+                    Current stock: <span className="font-medium">{selectedItem.current_stock} {selectedItem.base_unit}</span>
+                  </div>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setLines((current) => current.filter((_, i) => i !== index))}
+                  disabled={lines.length === 1}
+                  aria-label={`Remove line ${index + 1}`}
+                >
+                  ✕
+                </Button>
               </div>
-              <div className="w-full sm:w-24">
-                <Input
-                  label={index === 0 ? 'Qty' : undefined}
-                  value={line.quantity}
-                  onChange={(e) => updateLine(index, { quantity: e.target.value })}
-                  inputMode="numeric"
-                />
-              </div>
-              <div className="w-full sm:w-28">
-                <Input
-                  label={index === 0 ? 'Unit cost ₹' : undefined}
-                  value={line.unit_cost}
-                  onChange={(e) => updateLine(index, { unit_cost: e.target.value })}
-                  inputMode="decimal"
-                />
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setLines((current) => current.filter((_, i) => i !== index))}
-                disabled={lines.length === 1}
-                aria-label={`Remove line ${index + 1}`}
-              >
-                ✕
-              </Button>
-            </div>
-          ))}
+            )
+          })}
           <Button variant="secondary" size="sm" onClick={() => setLines((c) => [...c, { item_id: '', quantity: '1', unit_cost: '' }])}>
             + Add line
           </Button>

@@ -40,6 +40,16 @@ async def create_item(
 ) -> dict[str, Any]:
     await _validate_references(db, payload)
 
+    # Check for duplicate item name within the same business unit (case-insensitive)
+    name_duplicate = await db.inventory_items.find_one({
+        "name": {"$regex": f"^{payload.name.strip()}$", "$options": "i"},
+        "business_unit_id": payload.business_unit_id,
+    })
+    if name_duplicate:
+        raise BusinessRuleError(
+            f"An item named '{payload.name.strip()}' already exists in this business unit."
+        )
+
     duplicate = None
     if payload.sku:
         duplicate = await db.inventory_items.find_one({"sku": payload.sku})
@@ -97,13 +107,16 @@ async def update_item(
         raise NotFoundError("Item not found.")
 
     updates: dict[str, Any] = {}
-    for field in ("name", "sku", "category_id", "item_type", "min_stock_level", "supplier_id", "notes"):
+    for field in ("name", "sku", "category_id", "business_unit_id", "item_type", "base_unit", "min_stock_level", "supplier_id", "notes"):
         value = getattr(payload, field)
         if value is not None:
             if field == "name":
                 value = value.strip()
             if field == "sku":
                 value = value.strip() or None
+            if field in ("category_id", "business_unit_id"):
+                if not ObjectId.is_valid(value):
+                    raise BusinessRuleError(f"Invalid {field.replace('_', ' ')}.")
             updates[field] = value
     for field in ("purchase_price", "selling_price"):
         money_value = getattr(payload, field)
@@ -114,6 +127,56 @@ async def update_item(
 
     if not updates:
         return item
+
+    # Validate business_unit_id change
+    if "business_unit_id" in updates:
+        new_bu_id = updates["business_unit_id"]
+        if new_bu_id != item["business_unit_id"]:
+            # Check if new business unit exists and is active
+            unit = await db.business_units.find_one({"_id": oid(new_bu_id)})
+            if unit is None or not unit.get("active", True):
+                raise BusinessRuleError("Business unit not found or inactive.")
+            # Check for duplicate name in new business unit
+            check_name = updates.get("name", item["name"])
+            name_duplicate = await db.inventory_items.find_one({
+                "name": {"$regex": f"^{check_name}$", "$options": "i"},
+                "business_unit_id": new_bu_id,
+                "_id": {"$ne": item["_id"]},
+            })
+            if name_duplicate:
+                raise BusinessRuleError(
+                    f"An item named '{check_name}' already exists in the target business unit."
+                )
+
+    # Validate category_id change
+    if "category_id" in updates:
+        new_cat_id = updates["category_id"]
+        category = await db.categories.find_one({"_id": oid(new_cat_id)})
+        if category is None or not category.get("active", True):
+            raise BusinessRuleError("Category not found or inactive.")
+
+    # Validate base_unit change
+    if "base_unit" in updates:
+        new_unit = updates["base_unit"]
+        if new_unit != item["base_unit"]:
+            # Optionally warn: changing unit doesn't convert existing stock
+            pass
+
+    # Check for duplicate item name within the same business unit (case-insensitive)
+    target_bu = updates.get("business_unit_id", item["business_unit_id"])
+    if updates.get("name"):
+        check_name = updates["name"]
+    else:
+        check_name = item["name"]
+    name_duplicate = await db.inventory_items.find_one({
+        "name": {"$regex": f"^{check_name}$", "$options": "i"},
+        "business_unit_id": target_bu,
+        "_id": {"$ne": item["_id"]},
+    })
+    if name_duplicate:
+        raise BusinessRuleError(
+            f"An item named '{check_name}' already exists in this business unit."
+        )
 
     if updates.get("sku"):
         duplicate = await db.inventory_items.find_one(
@@ -127,10 +190,34 @@ async def update_item(
     return await db.inventory_items.find_one({"_id": item["_id"]})
 
 
+async def delete_item(
+    db: AsyncIOMotorDatabase,
+    item_id: str,
+) -> dict[str, Any]:
+    """Delete an inventory item. Only allowed if no stock movements exist (except opening)."""
+    if not ObjectId.is_valid(item_id):
+        raise NotFoundError("Item not found.")
+    item = await db.inventory_items.find_one({"_id": oid(item_id)})
+    if item is None:
+        raise NotFoundError("Item not found.")
+
+    # Check if item has stock movements (other than opening stock) - prevent deletion if so
+    movements_count = await db.inventory_movements.count_documents({
+        "item_id": item_id,
+        "reference_type": {"$ne": "opening"}
+    })
+    if movements_count > 0:
+        raise BusinessRuleError("Cannot delete item with stock movements. Deactivate instead.")
+
+    await db.inventory_items.delete_one({"_id": item["_id"]})
+    return item
+
+
 def build_item_query(
     *,
     business_unit_id: str | None = None,
     category_id: str | None = None,
+    supplier_id: str | None = None,
     search: str | None = None,
     status: str | None = None,
     active: bool | None = True,
@@ -140,6 +227,8 @@ def build_item_query(
         query["business_unit_id"] = business_unit_id
     if category_id and ObjectId.is_valid(category_id):
         query["category_id"] = category_id
+    if supplier_id and ObjectId.is_valid(supplier_id):
+        query["supplier_id"] = supplier_id
     if search:
         query["$or"] = [
             {"name": {"$regex": search, "$options": "i"}},

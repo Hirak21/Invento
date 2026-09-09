@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 
 import { Select } from '@/components/ui/Select'
 import { useAuth } from '@/hooks/useAuth'
@@ -47,6 +47,7 @@ export function AppShell() {
   const { user, logout } = useAuth()
   const { selectedBuId, setSelectedBuId } = useBusinessUnit()
   const navigate = useNavigate()
+  const location = useLocation()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [units, setUnits] = useState<BusinessUnit[]>([])
 
@@ -79,6 +80,9 @@ export function AppShell() {
     </Select>
   )
 
+  const isDashboard = location.pathname === '/dashboard'
+  const isSettings = location.pathname === '/settings'
+
   return (
     <div className="min-h-dvh">
       {/* Mobile top bar */}
@@ -99,7 +103,16 @@ export function AppShell() {
           </svg>
         </button>
         <span className="text-sm font-semibold text-slate-900">Invento Lite</span>
-        <UserMenuButton username={user?.username ?? ''} onLogout={handleLogout} compact />
+        {isDashboard ? (
+          <div className="w-40">{unitSelector}</div>
+        ) : isSettings ? (
+          <UserMenuButton username={user?.username ?? ''} onLogout={handleLogout} compact />
+        ) : (
+          <div className="flex items-center gap-2">
+            <div className="w-40">{unitSelector}</div>
+            <UserMenuButton username={user?.username ?? ''} onLogout={handleLogout} compact />
+          </div>
+        )}
       </header>
 
       {/* Mobile drawer */}
@@ -132,8 +145,16 @@ export function AppShell() {
         <div className="flex min-w-0 flex-1 flex-col">
           {/* Desktop topbar */}
           <header className="hidden items-center justify-between border-b border-slate-200 bg-white px-8 py-3 md:flex">
-            <div className="w-48">{unitSelector}</div>
-            <UserMenuButton username={user?.username ?? ''} onLogout={handleLogout} />
+            {isDashboard ? (
+              <div className="w-48">{unitSelector}</div>
+            ) : isSettings ? (
+              <UserMenuButton username={user?.username ?? ''} onLogout={handleLogout} />
+            ) : (
+              <div className="flex items-center justify-between w-full">
+                <div className="w-48">{unitSelector}</div>
+                <UserMenuButton username={user?.username ?? ''} onLogout={handleLogout} />
+              </div>
+            )}
           </header>
 
           <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 md:px-8">

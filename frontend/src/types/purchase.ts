@@ -7,6 +7,7 @@ export interface PurchaseLine {
   quantity: number
   unit: string
   unit_cost: string
+  standard_purchase_price?: string | null
   line_total: string
 }
 

@@ -72,6 +72,7 @@ export function updateSupplier(
 export interface ItemFilters {
   business_unit_id?: string
   category_id?: string
+  supplier_id?: string
   search?: string
   status?: string
   include_inactive?: boolean
@@ -81,6 +82,7 @@ export function listItems(filters: ItemFilters = {}): Promise<ItemListResponse> 
   const params = new URLSearchParams()
   if (filters.business_unit_id) params.set('business_unit_id', filters.business_unit_id)
   if (filters.category_id) params.set('category_id', filters.category_id)
+  if (filters.supplier_id) params.set('supplier_id', filters.supplier_id)
   if (filters.search) params.set('search', filters.search)
   if (filters.status) params.set('status', filters.status)
   if (filters.include_inactive) params.set('include_inactive', 'true')
@@ -109,11 +111,15 @@ export function createItem(payload: ItemCreatePayload): Promise<InventoryItem> {
 
 export function updateItem(
   id: string,
-  patch: Partial<Omit<ItemCreatePayload, 'business_unit_id' | 'opening_stock'> & { active: boolean }>,
+  patch: Partial<Omit<ItemCreatePayload, 'opening_stock'> & { active: boolean; business_unit_id?: string; base_unit?: string }>,
 ): Promise<InventoryItem> {
   return apiFetch<InventoryItem>(`/inventory/items/${id}`, { method: 'PATCH', body: patch })
 }
 
 export function listItemMovements(id: string): Promise<MovementListResponse> {
   return apiFetch<MovementListResponse>(`/inventory/items/${id}/movements`)
+}
+
+export function deleteItem(id: string): Promise<void> {
+  return apiFetch<void>(`/inventory/items/${id}`, { method: 'DELETE' })
 }

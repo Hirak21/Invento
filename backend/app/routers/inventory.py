@@ -10,6 +10,7 @@ from app.routers.deps import OwnerUser as OwnerDep
 from app.services.inventory_service import (
     build_item_query,
     create_item,
+    delete_item,
     update_item,
 )
 from app.utils.audit import log_audit
@@ -24,6 +25,7 @@ async def list_items(
     user: CurrentUser,
     business_unit_id: str | None = None,
     category_id: str | None = None,
+    supplier_id: str | None = None,
     search: str | None = None,
     status: str | None = Query(default=None, pattern="^(out|low|healthy)$"),
     include_inactive: bool = False,
@@ -33,6 +35,7 @@ async def list_items(
     query = build_item_query(
         business_unit_id=business_unit_id,
         category_id=category_id,
+        supplier_id=supplier_id,
         search=search,
         status=status,
         active=None if include_inactive else True,
@@ -92,6 +95,34 @@ async def patch_item(item_id: str, payload: ItemUpdate, db: DBDep, user: OwnerDe
         business_unit_id=doc.get("business_unit_id"),
     )
     return item_out_from_doc(doc)
+
+
+@router.delete("/items/{item_id}", status_code=204)
+async def delete_inventory_item(item_id: str, db: DBDep, user: OwnerDep) -> None:
+    if not ObjectId.is_valid(item_id):
+        raise NotFoundError("Item not found.")
+    item = await db.inventory_items.find_one({"_id": ObjectId(item_id)})
+    if item is None:
+        raise NotFoundError("Item not found.")
+    # Check if item has stock movements (other than opening stock) - prevent deletion if so
+    movements_count = await db.inventory_movements.count_documents({
+        "item_id": item_id,
+        "reference_type": {"$ne": "opening"}
+    })
+    if movements_count > 0:
+        from app.utils.errors import BusinessRuleError
+        raise BusinessRuleError("Cannot delete item with stock movements. Deactivate instead.")
+    await db.inventory_items.delete_one({"_id": ObjectId(item_id)})
+    await log_audit(
+        db,
+        actor_id=str(user["_id"]),
+        actor_username=user["username"],
+        action="delete",
+        entity_type="inventory_item",
+        entity_id=item_id,
+        before={"name": item["name"], "current_stock": item.get("current_stock", 0)},
+        business_unit_id=item.get("business_unit_id"),
+    )
 
 
 @router.get("/items/{item_id}/movements", response_model=MovementListResponse)

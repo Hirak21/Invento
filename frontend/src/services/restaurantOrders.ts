@@ -3,18 +3,22 @@ import type { OrderStatus, Sale } from '@/types/sale'
 
 export interface RestaurantOrderFilters {
   business_unit_id?: string
-  status?: OrderStatus | 'all'
+  status?: OrderStatus | 'active' | 'all'
   room?: string
 }
 
 /** Active orders for the restaurant board: not SERVED, not CANCELLED. */
-export function listRestaurantOrders(filters: RestaurantOrderFilters = {}): Promise<{ orders: Sale[]; total: number }> {
+export async function listRestaurantOrders(
+  filters: RestaurantOrderFilters = {},
+): Promise<{ orders: Sale[]; total: number }> {
   const search = new URLSearchParams()
   if (filters.business_unit_id) search.set('business_unit_id', filters.business_unit_id)
   search.set('status', filters.status ?? 'active')
   if (filters.room) search.set('room', filters.room)
   const qs = search.toString()
-  return apiFetch<{ orders: Sale[]; total: number }>(`/sales?${qs}`)
+  // The sales endpoint returns { sales, total } - map to the board's shape.
+  const res = await apiFetch<{ sales: Sale[]; total: number }>(`/sales?${qs}`)
+  return { orders: res.sales ?? [], total: res.total ?? 0 }
 }
 
 /** Advance an order's status. Owner or staff; audited server-side. */

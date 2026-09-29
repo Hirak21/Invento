@@ -11,7 +11,7 @@ import { SalesPage } from '@/pages/SalesPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { ExpensesPage } from '@/pages/ExpensesPage'
 import { WastagePage } from '@/pages/WastagePage'
-import { PlaceholderPage } from '@/pages/PlaceholderPage'
+import { ReportsPage } from '@/pages/ReportsPage'
 import { RecipesPage } from '@/pages/RecipesPage'
 import { StockAlertsPage } from '@/pages/StockAlertsPage'
 import { RoomsPage } from '@/pages/RoomsPage'
@@ -50,7 +50,7 @@ export default function App() {
         <Route path="/sales" element={<SalesPage />} />
         <Route path="/wastage" element={<WastagePage />} />
         <Route path="/expenses" element={<ExpensesPage />} />
-        <Route path="/reports" element={<PlaceholderPage title="Reports" message="Reports will be available once transactions are recorded." />} />
+        <Route path="/reports" element={<ReportsPage />} />
         <Route path="/recipes" element={<RecipesPage />} />
         <Route path="/rooms" element={<RoomsPage />} />
         <Route path="/stock-alerts" element={<StockAlertsPage />} />

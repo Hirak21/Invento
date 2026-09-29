@@ -56,3 +56,22 @@ export async function apiFetch<T>(path: string, options: ApiRequestOptions = {})
 
   return data as T
 }
+
+/** Download a binary response (e.g. xlsx export) with the auth header attached. */
+export async function apiDownload(path: string): Promise<Blob> {
+  const token = localStorage.getItem(TOKEN_KEY)
+  const headers = new Headers()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+
+  let response: Response
+  try {
+    response = await fetch(`${BASE}${path}`, { headers })
+  } catch {
+    throw new ApiError(0, 'Cannot reach the server. Check your connection.')
+  }
+  if (!response.ok) {
+    if (response.status === 401 && token) localStorage.removeItem(TOKEN_KEY)
+    throw new ApiError(response.status, 'The download failed. Please try again.')
+  }
+  return response.blob()
+}

@@ -11,6 +11,7 @@ from app.models.sale import SaleCreate, sale_out_from_doc
 from app.models.enums import MovementType
 from app.services.ledger import is_oid, oid, record_movement
 from app.services.recipe_service import get_recipe as get_recipe_full
+from app.utils.audit import log_audit
 from app.utils.errors import BusinessRuleError, ConflictError, NotFoundError
 from app.utils.money import money_to_str, parse_money
 
@@ -199,6 +200,10 @@ async def create_sale(
         "created_at": datetime.now(UTC),
         "idempotency_key": payload.idempotency_key,
         "status": "completed",
+        "order_status": "PENDING",
+        "status_history": [
+            {"status": "PENDING", "at": sold_at, "by": actor_id, "by_username": actor_username}
+        ],
         "recipe_id": primary_recipe_id,
         "recipe_name": primary_recipe_name,
     }
@@ -379,17 +384,174 @@ async def get_sale(db: AsyncIOMotorDatabase, sale_id: str) -> dict[str, Any]:
     return sale_out_from_doc(doc)
 
 
+ORDER_STATUS_FLOW: dict[str, str | None] = {
+    "PENDING": "PREPARING",
+    "PREPARING": "READY",
+    "READY": "SERVED",
+    "SERVED": None,
+    "CANCELLED": None,
+}
+
+
+def _serialize_status_history(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "status": e.get("status", ""),
+            "at": e.get("at"),
+            "by_username": e.get("by_username", ""),
+        }
+        for e in entries
+    ]
+
+
+async def update_sale_status(
+    db: AsyncIOMotorDatabase,
+    sale_id: str,
+    new_status: str,
+    *,
+    actor_id: str,
+    actor_username: str,
+    actor_role: str,
+) -> dict[str, Any]:
+    """Advance a sale through the order lifecycle.
+
+    PENDING -> PREPARING -> READY -> SERVED. CANCELLED is allowed from any
+    pre-SERVED status by owner or staff and restores stock exactly once via
+    ADJUSTMENT_IN movements (operation records are never deleted).
+    """
+    from app.models.enums import MovementType
+
+    if not is_oid(sale_id):
+        raise NotFoundError("Sale not found.")
+    sale = await db.sales.find_one({"_id": oid(sale_id)})
+    if sale is None:
+        raise NotFoundError("Sale not found.")
+
+    current = sale.get("order_status", "PENDING")
+    if current == "CANCELLED":
+        raise BusinessRuleError("This order was cancelled.")
+    if current == "SERVED":
+        raise BusinessRuleError("This order is already served.")
+    if new_status not in ("PREPARING", "READY", "SERVED", "CANCELLED"):
+        raise BusinessRuleError("Invalid order status.")
+    if new_status != "CANCELLED":
+        expected = ORDER_STATUS_FLOW.get(current)
+        if expected != new_status:
+            raise BusinessRuleError(
+                f"Invalid status change: {current} can only move to {expected or 'nothing'}."
+            )
+    if current == "PENDING" and new_status == "SERVED":
+        raise BusinessRuleError("Invalid status change: PENDING cannot jump to SERVED.")
+
+    now = datetime.now(UTC)
+    history = list(sale.get("status_history") or [])
+    history.append({"status": new_status, "at": now, "by": actor_id, "by_username": actor_username})
+
+    updates: dict[str, Any] = {
+        "order_status": new_status,
+        "status_history": history,
+        "updated_at": now,
+    }
+
+    if new_status == "CANCELLED":
+        if sale.get("stay_id") and sale.get("payment_method") == "room_charge":
+            if sale.get("charge_settled", False):
+                raise BusinessRuleError(
+                    "This charge is already settled on a room bill and cannot be cancelled."
+                )
+        updates["cancelled_at"] = now
+        updates["cancelled_by"] = actor_id
+        updates["cancelled_by_username"] = actor_username
+
+    try:
+        async with await db.client.start_session() as session:
+            async with session.start_transaction():
+                result = await db.sales.find_one_and_update(
+                    {"_id": sale["_id"], "order_status": current},
+                    {"$set": updates},
+                    return_document=ReturnDocument.AFTER,
+                    session=session,
+                )
+                if result is None:
+                    raise BusinessRuleError("Order status changed concurrently. Retry.")
+
+                if new_status == "CANCELLED":
+                    # Restore stock exactly once for every non-recipe line.
+                    for line in result.get("items", []):
+                        if line.get("is_recipe"):
+                            continue
+                        item = await db.inventory_items.find_one(
+                            {"_id": oid(line["item_id"])}, session=session
+                        )
+                        if item is None:
+                            continue
+                        await db.inventory_items.update_one(
+                            {"_id": item["_id"]},
+                            {
+                                "$inc": {"current_stock": int(line["quantity"])},
+                                "$set": {"updated_at": now},
+                            },
+                            session=session,
+                        )
+                        await record_movement(
+                            db,
+                            session,
+                            item_doc=item,
+                            movement_type=MovementType.ADJUSTMENT_IN,
+                            quantity=int(line["quantity"]),
+                            reference_type="sale_cancel",
+                            reference_id=str(result["_id"]),
+                            unit_cost=item.get("purchase_price"),
+                            actor_id=actor_id,
+                            actor_username=actor_username,
+                            notes=f"Cancelled order {result.get('sale_number', '')}",
+                        )
+    except DuplicateKeyError:
+        raise ConflictError("Duplicate submission detected.") from None
+
+    await log_audit(
+        db,
+        actor_id=actor_id,
+        actor_username=actor_username,
+        action="cancel" if new_status == "CANCELLED" else "status_change",
+        entity_type="sale",
+        entity_id=sale_id,
+        before={"order_status": current},
+        after={"order_status": new_status},
+        business_unit_id=result.get("business_unit_id"),
+    )
+    return result
+
+
 def build_sale_query(
     *,
     business_unit_id: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    status: str | None = None,
+    payment_method: str | None = None,
 ) -> dict[str, Any]:
+    """Build the Mongo query for sale listings.
+
+    ``status`` is the order lifecycle filter: "active" (not SERVED/
+    CANCELLED), a specific status, or "all" (everything, including
+    cancelled). Legacy documents without order_status count as SERVED for
+    lifecycle filters but are always included in "all".
+    """
     from datetime import timedelta
 
     query: dict[str, Any] = {"status": "completed"}
     if business_unit_id and is_oid(business_unit_id):
         query["business_unit_id"] = business_unit_id
+    if payment_method:
+        query["payment_method"] = payment_method
+
+    if status and status != "all":
+        if status == "active":
+            query["order_status"] = {"$nin": ["SERVED", "CANCELLED"]}
+        else:
+            query["order_status"] = status
+
     range_filter: dict[str, Any] = {}
     if date_from:
         range_filter["$gte"] = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=UTC)

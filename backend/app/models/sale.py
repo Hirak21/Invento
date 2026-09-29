@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -45,6 +46,10 @@ class SaleCreate(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=64)
 
 
+class SaleStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(PREPARING|READY|SERVED|CANCELLED)$")
+
+
 class SaleOut(BaseModel):
     id: str
     sale_number: str
@@ -62,6 +67,9 @@ class SaleOut(BaseModel):
     recipe_name: str | None = None
     stay_id: str | None = None
     room_number: str | None = None
+    order_status: str = "PENDING"
+    status_history: list[dict[str, Any]] = []
+    charge_settled: bool | None = None
 
 
 class SaleListResponse(BaseModel):
@@ -98,4 +106,14 @@ def sale_out_from_doc(doc: dict) -> SaleOut:
         recipe_name=doc.get("recipe_name"),
         stay_id=doc.get("stay_id"),
         room_number=doc.get("room_number"),
+        order_status=doc.get("order_status", "SERVED"),
+        status_history=[
+            {
+                "status": entry.get("status", ""),
+                "at": entry.get("at"),
+                "by_username": entry.get("by_username", ""),
+            }
+            for entry in (doc.get("status_history") or [])
+        ],
+        charge_settled=doc.get("charge_settled"),
     )

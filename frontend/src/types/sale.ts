@@ -1,5 +1,29 @@
 export type SalePaymentMethod = 'cash' | 'card' | 'upi' | 'bank_transfer' | 'credit' | 'room_charge'
 
+export type OrderStatus = 'PENDING' | 'PREPARING' | 'READY' | 'SERVED' | 'CANCELLED'
+
+export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
+  PENDING: 'Pending',
+  PREPARING: 'Preparing',
+  READY: 'Ready',
+  SERVED: 'Served',
+  CANCELLED: 'Cancelled',
+}
+
+export const ORDER_STATUS_TONES: Record<OrderStatus, 'neutral' | 'low' | 'healthy' | 'out'> = {
+  PENDING: 'neutral',
+  PREPARING: 'low',
+  READY: 'healthy',
+  SERVED: 'healthy',
+  CANCELLED: 'out',
+}
+
+export interface SaleStatusEvent {
+  status: string
+  at: string | null
+  by_username: string
+}
+
 export interface SaleLine {
   item_id: string
   item_name: string
@@ -27,6 +51,9 @@ export interface Sale {
   recipe_name: string | null
   stay_id: string | null
   room_number: string | null
+  order_status: OrderStatus
+  status_history: SaleStatusEvent[]
+  charge_settled: boolean | null
 }
 
 export interface SaleListResponse {

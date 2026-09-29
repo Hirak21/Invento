@@ -8,6 +8,9 @@ import { Modal } from '@/components/ui/Modal'
 import { Select } from '@/components/ui/Select'
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
 import { checkIn, checkoutStay, createRoom, getStayBill, listRooms, listStays } from '@/services/rooms'
+import { cancelOrder, listRestaurantOrders, updateOrderStatus } from '@/services/restaurantOrders'
+import { ORDER_STATUS_LABELS, ORDER_STATUS_TONES } from '@/types/sale'
+import type { OrderStatus, Sale } from '@/types/sale'
 import type { Room, StayBill } from '@/types/room'
 import type { Stay } from '@/types/room'
 
@@ -65,13 +68,18 @@ export function RoomsPage() {
   const [recentStays, setRecentStays] = useState<Stay[]>([])
   const [openStayByRoom, setOpenStayByRoom] = useState<Map<string, Stay>>(new Map())
 
+  // live order board
+  const [orders, setOrders] = useState<Sale[]>([])
+  const [ordersBusy, setOrdersBusy] = useState<string | null>(null)
+
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [roomsRes, staysRes] = await Promise.all([
+      const [roomsRes, staysRes, ordersRes] = await Promise.all([
         listRooms({ business_unit_id: selectedBuId ?? undefined }),
         listStays({ business_unit_id: selectedBuId ?? undefined }),
+        listRestaurantOrders({ business_unit_id: selectedBuId ?? undefined, status: 'active' }),
       ])
       setRooms(roomsRes.rooms)
       const open = new Map<string, Stay>()
@@ -80,6 +88,7 @@ export function RoomsPage() {
       }
       setOpenStayByRoom(open)
       setRecentStays(staysRes.stays.filter((s) => s.status === 'closed').slice(0, 5))
+      setOrders(ordersRes.orders)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load rooms.')
     } finally {
@@ -163,6 +172,39 @@ export function RoomsPage() {
     }
   }
 
+  async function handleAdvance(sale: Sale) {
+    const flow: Record<string, OrderStatus> = {
+      PENDING: 'PREPARING',
+      PREPARING: 'READY',
+      READY: 'SERVED',
+    }
+    const next = flow[sale.order_status]
+    if (!next) return
+    setOrdersBusy(sale.id)
+    setError(null)
+    try {
+      await updateOrderStatus(sale.id, next)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update the order.')
+    } finally {
+      setOrdersBusy(null)
+    }
+  }
+
+  async function handleCancel(sale: Sale) {
+    setOrdersBusy(sale.id)
+    setError(null)
+    try {
+      await cancelOrder(sale.id)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not cancel the order.')
+    } finally {
+      setOrdersBusy(null)
+    }
+  }
+
   const openStaysByRoom = openStayByRoom
 
   return (
@@ -184,6 +226,77 @@ export function RoomsPage() {
           {error}
         </p>
       )}
+
+      {/* Live order board: today's active orders, room first */}
+      <section aria-label="Active orders">
+        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+          Active orders ({orders.length})
+        </h2>
+        {loading ? (
+          <p className="py-4 text-center text-sm text-slate-500">Loading orders…</p>
+        ) : orders.length === 0 ? (
+          <EmptyState message="No active orders right now. New restaurant orders appear here instantly." />
+        ) : (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {orders.map((order) => {
+              const elapsed = Math.max(0, Math.round((Date.now() - new Date(order.sold_at).getTime()) / 60000))
+              return (
+                <Card key={order.id} className="flex flex-col gap-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-lg font-bold text-slate-900">
+                        {order.room_number ? `Room ${order.room_number}` : 'Walk-in'}
+                      </p>
+                      <p className="text-xs text-slate-400">{order.sale_number}</p>
+                    </div>
+                    <Badge tone={ORDER_STATUS_TONES[order.order_status]}>
+                      {ORDER_STATUS_LABELS[order.order_status]}
+                    </Badge>
+                  </div>
+                  <ul className="space-y-0.5 text-sm text-slate-700">
+                    {order.items.map((line, idx) => (
+                      <li key={idx} className="truncate">
+                        {line.quantity} × {line.item_name}
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="flex items-center justify-between text-xs text-slate-400">
+                    <span>{elapsed < 60 ? `${elapsed} min` : `${Math.floor(elapsed / 60)}h ${elapsed % 60}m`}</span>
+                    <span className="font-semibold text-slate-900">
+                      ₹{Number(order.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                  {order.order_status !== 'SERVED' && order.order_status !== 'CANCELLED' && (
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        className="flex-1"
+                        pending={ordersBusy === order.id}
+                        onClick={() => void handleAdvance(order)}
+                      >
+                        {order.order_status === 'PENDING'
+                          ? 'Start preparing'
+                          : order.order_status === 'PREPARING'
+                            ? 'Mark ready'
+                            : 'Mark served'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        pending={ordersBusy === order.id}
+                        onClick={() => void handleCancel(order)}
+                        aria-label={`Cancel order ${order.sale_number}`}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  )}
+                </Card>
+              )
+            })}
+          </div>
+        )}
+      </section>
 
       {loading ? (
         <p className="py-8 text-center text-sm text-slate-500">Loading rooms…</p>

@@ -38,6 +38,9 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     await db.purchases.create_index("idempotency_key", unique=True, sparse=True)
     await db.purchases.create_index([("business_unit_id", 1), ("purchased_at", -1)])
     await db.purchases.create_index("purchase_number")
+    await db.recipes.create_index("business_unit_id")
+    await db.recipes.create_index("name")
+    await db.recipe_ingredients.create_index("recipe_id")
     await db.sales.create_index("idempotency_key", unique=True, sparse=True)
     await db.sales.create_index([("business_unit_id", 1), ("sold_at", -1)])
     await db.sales.create_index("sale_number")
@@ -47,6 +50,20 @@ async def ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     await db.stock_adjustments.create_index([("business_unit_id", 1), ("adjusted_at", -1)])
     await db.expenses.create_index("idempotency_key", unique=True, sparse=True)
     await db.expenses.create_index([("business_unit_id", 1), ("spent_at", -1)])
+    # Rooms & stays: room number unique per business unit; one OPEN stay per
+    # room enforced by a unique partial index (reservation-style check-in).
+    await db.rooms.create_index(
+        [("business_unit_id", 1), ("room_number", 1)],
+        unique=True,
+        partialFilterExpression={"active": True},
+    )
+    await db.stays.create_index(
+        [("room_id", 1), ("status", 1)],
+        unique=True,
+        partialFilterExpression={"status": "open"},
+    )
+    await db.stays.create_index([("business_unit_id", 1), ("checked_in_at", -1)])
+    await db.sales.create_index("stay_id", sparse=True)
 
 
 def get_db(request_db_name: str | None = None) -> AsyncIOMotorDatabase:

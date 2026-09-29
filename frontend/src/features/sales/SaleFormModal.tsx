@@ -9,10 +9,14 @@ import { useBusinessUnit } from '@/hooks/useBusinessUnit'
 import { listItems } from '@/services/masterData'
 import { listMenuItems } from '@/services/menu'
 import { createSale } from '@/services/sales'
+import { listRooms, listStays } from '@/services/rooms'
+import type { Room, Stay } from '@/types/room'
 import type { InventoryItem } from '@/types/inventory'
 import type { BusinessUnit } from '@/types/master'
 import { PAYMENT_METHODS } from '@/types/purchase'
 import type { SalePaymentMethod } from '@/types/sale'
+
+type PaymentMethodChoice = SalePaymentMethod | 'room_charge'
 
 function todayISO(): string {
   return new Date().toISOString().split('T')[0]
@@ -67,7 +71,10 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
   const [selectedMenuItem, setSelectedMenuItem] = useState<MenuItem | null>(null)
   const [recipeQty, setRecipeQty] = useState('')
   const [discount, setDiscount] = useState('')
-  const [paymentMethod, setPaymentMethod] = useState<SalePaymentMethod>('cash')
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethodChoice>('cash')
+  const [rooms, setRooms] = useState<Room[]>([])
+  const [openStayByRoom, setOpenStayByRoom] = useState<Map<string, Stay>>(new Map())
+  const [selectedStayId, setSelectedStayId] = useState('')
   const [saleDate, setSaleDate] = useState(todayISO)
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
@@ -84,6 +91,7 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
     setSearch('')
     setDiscount('')
     setPaymentMethod('cash')
+    setSelectedStayId('')
     setSaleDate(todayISO())
     setError(null)
     setIdempotencyKey(crypto.randomUUID())
@@ -125,6 +133,23 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
       .catch(() => setMenuItems([]))
       .finally(() => setMenuLoading(false))
   }, [open, businessUnitId, selectedMenuTab])
+
+  useEffect(() => {
+    if (!open || !businessUnitId || paymentMethod !== 'room_charge') return
+    let cancelled = false
+    Promise.all([listRooms({ business_unit_id: businessUnitId, status: 'occupied' }), listStays({ business_unit_id: businessUnitId, status: 'open' })])
+      .then(([roomsRes, staysRes]) => {
+        if (cancelled) return
+        setRooms(roomsRes.rooms)
+        const open = new Map<string, Stay>()
+        for (const stay of staysRes.stays) open.set(stay.room_id, stay)
+        setOpenStayByRoom(open)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [open, businessUnitId, paymentMethod])
 
   function addItemToCart(item: InventoryItem) {
     setError(null)
@@ -224,6 +249,8 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
     setError(null)
     if (cart.length === 0) return setError('Add at least one item to the sale.')
     if (discount && !MONEY_RE.test(discount)) return setError('Enter a valid discount amount.')
+    if (paymentMethod === 'room_charge' && !selectedStayId)
+      return setError('Select the occupied room to charge this sale to.')
 
     const itemLines = cart.filter((l) => l.kind === 'item')
     const overselling = itemLines.find((line) => line.quantity > line.item.current_stock)
@@ -249,6 +276,7 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
         items: lines,
         discount: discount || null,
         payment_method: paymentMethod,
+        stay_id: paymentMethod === 'room_charge' ? selectedStayId : null,
         date: saleDate,
         idempotency_key: idempotencyKey,
         ...(isSingleRecipe ? { recipe_id: (cart[0] as CartLineRecipe).id } : {}),
@@ -546,7 +574,7 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
               <Select
                 label=""
                 value={paymentMethod}
-                onChange={(e) => setPaymentMethod(e.target.value as SalePaymentMethod)}
+                onChange={(e) => setPaymentMethod(e.target.value as PaymentMethodChoice)}
                 aria-label="Payment method"
               >
                 {PAYMENT_METHODS.map((m) => (
@@ -554,7 +582,28 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
                     Paid via {m.label}
                   </option>
                 ))}
+                <option value="room_charge">Charge to room</option>
               </Select>
+              {paymentMethod === 'room_charge' && (
+                <Select
+                  label=""
+                  value={selectedStayId}
+                  onChange={(e) => setSelectedStayId(e.target.value)}
+                  aria-label="Room to charge"
+                  error={paymentMethod === 'room_charge' && !selectedStayId ? 'Select the room to charge.' : null}
+                >
+                  <option value="">Select occupied room…</option>
+                  {rooms.map((room) => {
+                    const stay = openStayByRoom.get(room.id)
+                    return (
+                      <option key={room.id} value={stay?.id ?? ''}>
+                        Room {room.room_number}
+                        {stay ? ` · ${stay.guest_name}` : ''}
+                      </option>
+                    )
+                  })}
+                </Select>
+              )}
 
               {error && (
                 <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">

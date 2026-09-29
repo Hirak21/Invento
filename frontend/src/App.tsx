@@ -12,6 +12,9 @@ import { SettingsPage } from '@/pages/SettingsPage'
 import { ExpensesPage } from '@/pages/ExpensesPage'
 import { WastagePage } from '@/pages/WastagePage'
 import { PlaceholderPage } from '@/pages/PlaceholderPage'
+import { RecipesPage } from '@/pages/RecipesPage'
+import { StockAlertsPage } from '@/pages/StockAlertsPage'
+import { RoomsPage } from '@/pages/RoomsPage'
 
 function RequireAuth({ children }: { children: ReactElement }) {
   const { user, loading } = useAuth()
@@ -44,22 +47,13 @@ export default function App() {
         <Route path="/inventory" element={<InventoryPage />} />
         <Route path="/purchases" element={<PurchasesPage />} />
         <Route path="/settings" element={<SettingsPage />} />
-        <Route
-          path="/sales"
-          element={<SalesPage />}
-        />
-        <Route
-          path="/wastage"
-          element={<WastagePage />}
-        />
-        <Route
-          path="/expenses"
-          element={<ExpensesPage />}
-        />
-        <Route
-          path="/reports"
-          element={<PlaceholderPage title="Reports" message="Reports will be available once transactions are recorded." />}
-        />
+        <Route path="/sales" element={<SalesPage />} />
+        <Route path="/wastage" element={<WastagePage />} />
+        <Route path="/expenses" element={<ExpensesPage />} />
+        <Route path="/reports" element={<PlaceholderPage title="Reports" message="Reports will be available once transactions are recorded." />} />
+        <Route path="/recipes" element={<RecipesPage />} />
+        <Route path="/rooms" element={<RoomsPage />} />
+        <Route path="/stock-alerts" element={<StockAlertsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

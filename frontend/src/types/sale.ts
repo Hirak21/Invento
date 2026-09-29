@@ -1,4 +1,4 @@
-export type SalePaymentMethod = 'cash' | 'card' | 'upi' | 'bank_transfer' | 'credit'
+export type SalePaymentMethod = 'cash' | 'card' | 'upi' | 'bank_transfer' | 'credit' | 'room_charge'
 
 export interface SaleLine {
   item_id: string
@@ -23,6 +23,10 @@ export interface Sale {
   notes: string | null
   sold_at: string
   created_by_username: string | null
+  recipe_id: string | null
+  recipe_name: string | null
+  stay_id: string | null
+  room_number: string | null
 }
 
 export interface SaleListResponse {

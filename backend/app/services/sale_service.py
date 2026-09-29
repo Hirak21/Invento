@@ -58,6 +58,21 @@ async def create_sale(
     if unit is None or not unit.get("active", True):
         raise BusinessRuleError("Business unit not found or inactive.")
 
+    # Charge-to-room: validate the stay BEFORE the transaction, then enforce
+    # it is still open INSIDE the transaction (guest may check out between the
+    # two). Charges attach to the sale once - no duplicate billing records.
+    stay_doc: dict[str, Any] | None = None
+    if payload.payment_method == "room_charge":
+        if not payload.stay_id or not is_oid(payload.stay_id):
+            raise BusinessRuleError("An open stay is required to charge to a room.")
+        stay_doc = await db.stays.find_one({"_id": oid(payload.stay_id)})
+        if stay_doc is None or stay_doc.get("status") != "open":
+            raise BusinessRuleError("This stay is not open. The guest may have checked out.")
+        if stay_doc["business_unit_id"] != payload.business_unit_id:
+            raise BusinessRuleError("The stay does not belong to this business unit.")
+    elif payload.stay_id is not None:
+        raise BusinessRuleError("stay_id can only be used with the room_charge payment method.")
+
     # Backwards-compatible single-recipe payload (recipe_id field).
     if payload.recipe_id is not None:
         if not is_oid(payload.recipe_id):
@@ -185,6 +200,9 @@ async def create_sale(
         "reference_number": payload.reference_number,
         "notes": payload.notes,
         "sold_at": sold_at,
+        "stay_id": str(stay_doc["_id"]) if stay_doc is not None else None,
+        "room_number": stay_doc.get("room_number") if stay_doc is not None else None,
+        "charge_settled": False if stay_doc is not None else None,
         "created_by": actor_id,
         "created_by_username": actor_username,
         "created_at": datetime.now(UTC),
@@ -197,6 +215,15 @@ async def create_sale(
     try:
         async with await db.client.start_session() as session:
             async with session.start_transaction():
+                if stay_doc is not None:
+                    fresh = await db.stays.find_one(
+                        {"_id": stay_doc["_id"]}, session=session
+                    )
+                    if fresh is None or fresh.get("status") != "open":
+                        raise BusinessRuleError(
+                            "This stay is not open. The guest may have checked out."
+                        )
+
                 # Stock guard + item validation INSIDE the transaction so
                 # concurrent sales cannot both pass against stale balances.
                 # 1) Billable inventory lines (direct sale demand).

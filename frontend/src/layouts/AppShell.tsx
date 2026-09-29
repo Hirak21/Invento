@@ -11,8 +11,11 @@ import { cn } from '@/utils/cn'
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard' },
   { to: '/sales', label: 'Sales' },
+  { to: '/rooms', label: 'Rooms' },
   { to: '/purchases', label: 'Purchases' },
   { to: '/inventory', label: 'Inventory' },
+  { to: '/recipes', label: 'Recipes' },
+  { to: '/stock-alerts', label: 'Stock Alerts' },
   { to: '/wastage', label: 'Wastage' },
   { to: '/expenses', label: 'Expenses' },
   { to: '/reports', label: 'Reports' },

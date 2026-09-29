@@ -12,6 +12,7 @@ class SalePaymentMethod(str, Enum):
     UPI = "upi"
     BANK_TRANSFER = "bank_transfer"
     CREDIT = "credit"
+    ROOM_CHARGE = "room_charge"
 
 
 class SaleLineIn(BaseModel):
@@ -38,6 +39,9 @@ class SaleCreate(BaseModel):
     reference_number: str | None = Field(default=None, max_length=60)
     notes: str | None = Field(default=None, max_length=500)
     date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    recipe_id: str | None = None
+    # Charge-to-room: open stay id. Required when payment_method=room_charge.
+    stay_id: str | None = None
     idempotency_key: str = Field(min_length=8, max_length=64)
 
 
@@ -54,6 +58,10 @@ class SaleOut(BaseModel):
     notes: str | None
     sold_at: datetime
     created_by_username: str | None
+    recipe_id: str | None = None
+    recipe_name: str | None = None
+    stay_id: str | None = None
+    room_number: str | None = None
 
 
 class SaleListResponse(BaseModel):
@@ -86,4 +94,8 @@ def sale_out_from_doc(doc: dict) -> SaleOut:
         notes=doc.get("notes"),
         sold_at=doc["sold_at"],
         created_by_username=doc.get("created_by_username"),
+        recipe_id=doc.get("recipe_id"),
+        recipe_name=doc.get("recipe_name"),
+        stay_id=doc.get("stay_id"),
+        room_number=doc.get("room_number"),
     )

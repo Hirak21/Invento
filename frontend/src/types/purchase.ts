@@ -40,6 +40,7 @@ export const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
   { value: 'credit', label: 'Credit' },
 ]
 
-export function formatPaymentMethod(method: PaymentMethod): string {
+export function formatPaymentMethod(method: string): string {
+  if (method === 'room_charge') return 'Room charge'
   return PAYMENT_METHODS.find((m) => m.value === method)?.label ?? method
 }

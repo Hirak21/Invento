@@ -12,12 +12,31 @@ def idem() -> str:
 
 
 async def make_sale(client, headers, bu_id, item_id, quantity=2, unit_price="45.00"):
+    """Create a cash sale. Counter sales start SERVED (delivered at the till);
+    the tests that need a working order charge to a room instead."""
     resp = await client.post(
         "/api/sales",
         json={
             "business_unit_id": bu_id,
             "items": [{"item_id": item_id, "quantity": quantity, "unit_price": unit_price}],
             "payment_method": "cash",
+            "idempotency_key": idem(),
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+async def make_room_order(client, headers, bu_id, item_id, stay_id, quantity=2, unit_price="45.00"):
+    """Room-charge sale: starts PENDING on the order board."""
+    resp = await client.post(
+        "/api/sales",
+        json={
+            "business_unit_id": bu_id,
+            "items": [{"item_id": item_id, "quantity": quantity, "unit_price": unit_price}],
+            "payment_method": "room_charge",
+            "stay_id": stay_id,
             "idempotency_key": idem(),
         },
         headers=headers,
@@ -35,15 +54,28 @@ async def patch_status(client, headers, sale_id, status):
 
 
 async def test_new_sale_starts_pending(client, owner_headers):
+    """Room-charge orders start PENDING; cash counter sales start SERVED."""
+    from tests.test_rooms import make_room, check_in_room
+
     bu_id, _, item = await seed_stock(client, owner_headers, stock=10)
-    sale = await make_sale(client, owner_headers, bu_id, item["id"])
-    assert sale["order_status"] == "PENDING"
-    assert sale["status_history"][0]["status"] == "PENDING"
+    room = await make_room(client, owner_headers, bu_id, "PD-1")
+    stay = await check_in_room(client, owner_headers, room["id"], "Board Guest")
+
+    order = await make_room_order(client, owner_headers, bu_id, item["id"], stay["id"])
+    assert order["order_status"] == "PENDING"
+    assert order["status_history"][0]["status"] == "PENDING"
+
+    counter = await make_sale(client, owner_headers, bu_id, item["id"])
+    assert counter["order_status"] == "SERVED"
 
 
 async def test_invalid_transition_rejected(client, owner_headers):
+    from tests.test_rooms import make_room, check_in_room
+
     bu_id, _, item = await seed_stock(client, owner_headers, stock=10)
-    sale = await make_sale(client, owner_headers, bu_id, item["id"])
+    room = await make_room(client, owner_headers, bu_id, "PD-2")
+    stay = await check_in_room(client, owner_headers, room["id"], "Flow Guest")
+    sale = await make_room_order(client, owner_headers, bu_id, item["id"], stay["id"])
 
     skip = await patch_status(client, owner_headers, sale["id"], "READY")
     assert skip.status_code == 422
@@ -53,8 +85,12 @@ async def test_invalid_transition_rejected(client, owner_headers):
 
 
 async def test_full_lifecycle_and_terminal_served(client, owner_headers):
+    from tests.test_rooms import make_room, check_in_room
+
     bu_id, _, item = await seed_stock(client, owner_headers, stock=10)
-    sale = await make_sale(client, owner_headers, bu_id, item["id"])
+    room = await make_room(client, owner_headers, bu_id, "PD-3")
+    stay = await check_in_room(client, owner_headers, room["id"], "Cycle Guest")
+    sale = await make_room_order(client, owner_headers, bu_id, item["id"], stay["id"])
 
     for status in ("PREPARING", "READY", "SERVED"):
         resp = await patch_status(client, owner_headers, sale["id"], status)
@@ -66,8 +102,12 @@ async def test_full_lifecycle_and_terminal_served(client, owner_headers):
 
 
 async def test_cancel_restores_stock_once(client, owner_headers):
+    from tests.test_rooms import make_room, check_in_room
+
     bu_id, _, item = await seed_stock(client, owner_headers, stock=10)
-    sale = await make_sale(client, owner_headers, bu_id, item["id"], quantity=4)
+    room = await make_room(client, owner_headers, bu_id, "PD-4")
+    stay = await check_in_room(client, owner_headers, room["id"], "Cancel Guest")
+    sale = await make_room_order(client, owner_headers, bu_id, item["id"], stay["id"], quantity=4)
 
     resp = await client.delete(f"/api/sales/{sale['id']}", headers=owner_headers)
     assert resp.status_code == 200, resp.text
@@ -91,8 +131,12 @@ async def test_cancel_restores_stock_once(client, owner_headers):
 
 
 async def test_cannot_cancel_after_served(client, owner_headers):
+    from tests.test_rooms import make_room, check_in_room
+
     bu_id, _, item = await seed_stock(client, owner_headers, stock=10)
-    sale = await make_sale(client, owner_headers, bu_id, item["id"])
+    room = await make_room(client, owner_headers, bu_id, "PD-5")
+    stay = await check_in_room(client, owner_headers, room["id"], "Served Guest")
+    sale = await make_room_order(client, owner_headers, bu_id, item["id"], stay["id"])
     for status in ("PREPARING", "READY", "SERVED"):
         await patch_status(client, owner_headers, sale["id"], status)
 
@@ -101,8 +145,12 @@ async def test_cannot_cancel_after_served(client, owner_headers):
 
 
 async def test_cancel_audited(client, owner_headers):
+    from tests.test_rooms import make_room, check_in_room
+
     bu_id, _, item = await seed_stock(client, owner_headers, stock=10)
-    sale = await make_sale(client, owner_headers, bu_id, item["id"])
+    room = await make_room(client, owner_headers, bu_id, "PD-6")
+    stay = await check_in_room(client, owner_headers, room["id"], "Audit Guest")
+    sale = await make_room_order(client, owner_headers, bu_id, item["id"], stay["id"])
     await client.delete(f"/api/sales/{sale['id']}", headers=owner_headers)
 
     from app.core.config import get_settings
@@ -118,12 +166,19 @@ async def test_cancel_audited(client, owner_headers):
 
 
 async def test_status_filters(client, owner_headers):
+    from tests.test_rooms import make_room, check_in_room
+
     bu_id, _, item = await seed_stock(client, owner_headers, stock=50)
-    active_sale = await make_sale(client, owner_headers, bu_id, item["id"])
-    done_sale = await make_sale(client, owner_headers, bu_id, item["id"])
+    room = await make_room(client, owner_headers, bu_id, "PD-7")
+    stay = await check_in_room(client, owner_headers, room["id"], "Filter Guest")
+
+    active_sale = await make_room_order(client, owner_headers, bu_id, item["id"], stay["id"])
+    done_sale = await make_room_order(client, owner_headers, bu_id, item["id"], stay["id"])
     await patch_status(client, owner_headers, done_sale["id"], "PREPARING")
     await patch_status(client, owner_headers, done_sale["id"], "READY")
     await patch_status(client, owner_headers, done_sale["id"], "SERVED")
+
+    counter_sale = await make_sale(client, owner_headers, bu_id, item["id"])
 
     active = await client.get(
         "/api/sales", params={"business_unit_id": bu_id, "status": "active"}, headers=owner_headers
@@ -135,18 +190,25 @@ async def test_status_filters(client, owner_headers):
     served = await client.get(
         "/api/sales", params={"business_unit_id": bu_id, "status": "SERVED"}, headers=owner_headers
     )
-    assert [s["id"] for s in served.json()["sales"]] == [done_sale["id"]]
+    served_ids = [s["id"] for s in served.json()["sales"]]
+    assert done_sale["id"] in served_ids  # lifecycle-SERVED order
+    assert counter_sale["id"] in served_ids  # counter sale is SERVED at creation
 
     everything = await client.get(
         "/api/sales", params={"business_unit_id": bu_id, "status": "all"}, headers=owner_headers
     )
     all_ids = [s["id"] for s in everything.json()["sales"]]
     assert active_sale["id"] in all_ids and done_sale["id"] in all_ids
+    assert counter_sale["id"] in all_ids  # legacy-style SERVED sales remain listable
 
 
 async def test_staff_can_advance_and_cancel(client, staff_headers, owner_headers):
+    from tests.test_rooms import make_room, check_in_room
+
     bu_id, _, item = await seed_stock(client, owner_headers, stock=10)
-    sale = await make_sale(client, staff_headers, bu_id, item["id"])
+    room = await make_room(client, owner_headers, bu_id, "PD-8")
+    stay = await check_in_room(client, owner_headers, room["id"], "Staff Guest")
+    sale = await make_room_order(client, staff_headers, bu_id, item["id"], stay["id"])
 
     resp = await patch_status(client, staff_headers, sale["id"], "PREPARING")
     assert resp.status_code == 200

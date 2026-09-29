@@ -9,6 +9,7 @@ from app.models.room import (
     StayCheckIn,
     StayListResponse,
     StayOut,
+    room_out_from_doc,
     stay_out_from_doc,
 )
 from app.routers.deps import CurrentUser, DBDep, OwnerUser

@@ -7,7 +7,7 @@ from motor.motor_asyncio import AsyncIOMotorClientSession, AsyncIOMotorDatabase
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from app.models.sale import SaleCreate, sale_out_from_doc
+from app.models.sale import SaleCreate, SalePaymentMethod, sale_out_from_doc
 from app.models.enums import MovementType
 from app.services.ledger import is_oid, oid, record_movement
 from app.services.recipe_service import get_recipe as get_recipe_full
@@ -200,10 +200,10 @@ async def create_sale(
         "created_at": datetime.now(UTC),
         "idempotency_key": payload.idempotency_key,
         "status": "completed",
-        "order_status": "PENDING",
-        "status_history": [
-            {"status": "PENDING", "at": sold_at, "by": actor_id, "by_username": actor_username}
-        ],
+        # Room charges are open orders until delivered to the room (board);
+        # paid counter sales are complete at the till.
+        "order_status": "PENDING" if payload.payment_method == SalePaymentMethod.ROOM_CHARGE else "SERVED",
+        "status_history": [],
         "recipe_id": primary_recipe_id,
         "recipe_name": primary_recipe_name,
     }
@@ -302,6 +302,11 @@ async def create_sale(
                         )
 
                 doc["sale_number"] = await _next_sale_number(db, session)
+                initial_status = doc["order_status"]
+                if initial_status == "PENDING":
+                    doc["status_history"] = [
+                        {"status": "PENDING", "at": sold_at, "by": actor_id, "by_username": actor_username}
+                    ]
                 result = await db.sales.insert_one(doc, session=session)
 
                 # 4) Deduct direct sale demand and record one movement per line.

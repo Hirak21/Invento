@@ -100,33 +100,14 @@ async def create_sale(
     # (stock-only, non-billable).
     sale_demand: dict[str, dict[str, Any]] = {}
     ingredient_demand: dict[str, int] = {}
-    recipe_refs: dict[str, dict[str, Any]] = {}
 
-    for line in payload.items:
-        key = line.item_id
-        if key in recipe_refs:
-            existing = recipe_refs[key]
-            existing["quantity"] += line.quantity
-        else:
-            recipe_refs[key] = {
-                "item_id": key,
-                "quantity": line.quantity,
-                "unit_price": line.unit_price,
-            }
-
-    recipe_ids = list(recipe_refs.keys())
+    candidate_ids = {line.item_id for line in payload.items}
+    valid_candidates = [cid for cid in candidate_ids if is_oid(cid)]
     recipes_by_id: dict[str, dict[str, Any]] = {}
-    if recipe_ids:
-        invalid = [rid for rid in recipe_ids if not is_oid(rid)]
-        if invalid:
-            raise BusinessRuleError("One of the menu items does not exist.")
-        recipe_docs = await db.recipes.find({"_id": {"$in": [oid(rid) for rid in recipe_ids]}}).to_list(
-            len(recipe_ids)
-        )
-        found_ids = {str(doc["_id"]) for doc in recipe_docs}
-        missing = [rid for rid in recipe_ids if rid not in found_ids]
-        if missing:
-            raise BusinessRuleError("One of the menu items does not exist.")
+    if valid_candidates:
+        recipe_docs = await db.recipes.find(
+            {"_id": {"$in": [oid(cid) for cid in valid_candidates]}}
+        ).to_list(len(valid_candidates))
         for recipe_doc in recipe_docs:
             if recipe_doc["business_unit_id"] != payload.business_unit_id:
                 raise BusinessRuleError(
@@ -136,28 +117,38 @@ async def create_sale(
                 raise BusinessRuleError(f"The recipe '{recipe_doc['name']}' is inactive.")
             recipes_by_id[str(recipe_doc["_id"])] = recipe_doc
 
+    recipe_refs: dict[str, dict[str, Any]] = {}
+    for line in payload.items:
+        if line.item_id in recipes_by_id:
+            existing = recipe_refs.get(line.item_id)
+            if existing:
+                existing["quantity"] += line.quantity
+            else:
+                recipe_refs[line.item_id] = {
+                    "item_id": line.item_id,
+                    "quantity": line.quantity,
+                    "unit_price": line.unit_price,
+                }
+        else:
+            existing = sale_demand.get(line.item_id)
+            if existing:
+                existing["quantity"] += line.quantity
+            else:
+                sale_demand[line.item_id] = {
+                    "item_id": line.item_id,
+                    "quantity": line.quantity,
+                    "unit_price": line.unit_price,
+                }
+
     # BOM explosion: accumulate ingredient demand per recipe line quantity.
+    # get_recipe_full returns pydantic models (RecipeIngredientOut), not dicts.
     for rid, ref in recipe_refs.items():
         recipe_full_data: dict[str, Any] = await get_recipe_full(db, rid)
         for ing in recipe_full_data["ingredients"]:
-            ing_key = str(ing["item_id"])
+            ing_key = str(ing.item_id)
             ingredient_demand[ing_key] = (
-                ingredient_demand.get(ing_key, 0) + int(ing["quantity"]) * ref["quantity"]
+                ingredient_demand.get(ing_key, 0) + int(ing.quantity) * ref["quantity"]
             )
-
-    for line in payload.items:
-        key = line.item_id
-        if key in recipes_by_id:
-            continue  # recipes are billable lines, not direct inventory sales
-        existing = sale_demand.get(key)
-        if existing:
-            existing["quantity"] += line.quantity
-        else:
-            sale_demand[key] = {
-                "item_id": key,
-                "quantity": line.quantity,
-                "unit_price": line.unit_price,
-            }
 
     # Items that are BOTH sold directly and consumed as ingredients get their
     # demands combined for the stock guard.

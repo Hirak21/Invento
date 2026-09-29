@@ -9,13 +9,17 @@ from app.routers import auth as auth_router
 from app.routers import business_units as business_units_router
 from app.routers import catalog as catalog_router
 from app.routers import inventory as inventory_router
-from app.routers import meta as meta_router
+from app.routers.recipes import router as recipes_router
+from app.routers.menu import router as menu_router
 from app.routers import purchases as purchases_router
 from app.routers import sales as sales_router
 from app.routers import wastage as wastage_router
 from app.routers import expenses as expenses_router
 from app.routers import dashboard as dashboard_router
 from app.routers import reports as reports_router
+from app.routers import meta as meta_router
+from app.routers import stock_alerts as stock_alerts_router
+from app.routers import rooms as rooms_router
 from app.utils.errors import register_exception_handlers
 
 
@@ -70,6 +74,10 @@ def create_app() -> FastAPI:
     app.include_router(expenses_router.router, prefix="/api")
     app.include_router(dashboard_router.router, prefix="/api")
     app.include_router(reports_router.router, prefix="/api")
+    app.include_router(stock_alerts_router.router, prefix="/api")
+    app.include_router(rooms_router.router, prefix="/api")
+    app.include_router(recipes_router, prefix="/api")
+    app.include_router(menu_router, prefix="/api")
     app.include_router(meta_router.router, prefix="/api")
 
     @app.get("/api/health", tags=["health"])

@@ -26,6 +26,8 @@ export function createSale(body: {
   notes?: string | null
   date?: string
   idempotency_key: string
+  /** Charge-to-room: open stay id. Required when payment_method is room_charge. */
+  stay_id?: string | null
 }): Promise<Sale> {
   return apiFetch<Sale>('/sales', { method: 'POST', body })
 }

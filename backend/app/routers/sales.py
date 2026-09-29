@@ -1,8 +1,14 @@
 from fastapi import APIRouter, Query
 
 from app.models.sale import SaleCreate, SaleListResponse, SaleOut, sale_out_from_doc
+from app.models.sale import SaleStatusUpdate
 from app.routers.deps import CurrentUser, DBDep
-from app.services.sale_service import build_sale_query, create_sale, get_sale
+from app.services.sale_service import (
+    build_sale_query,
+    create_sale,
+    get_sale,
+    update_sale_status,
+)
 from app.utils.audit import log_audit
 
 router = APIRouter(prefix="/sales", tags=["sales"])
@@ -38,6 +44,8 @@ async def list_sales(
     business_unit_id: str | None = None,
     date_from: str | None = Query(default=None, alias="from", pattern=r"^\d{4}-\d{2}-\d{2}$"),
     date_to: str | None = Query(default=None, alias="to", pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    status: str | None = Query(default=None, pattern="^(active|all|PENDING|PREPARING|READY|SERVED|CANCELLED)$"),
+    payment_method: str | None = Query(default=None, pattern="^(cash|card|upi|bank_transfer|credit|room_charge)$"),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> SaleListResponse:
@@ -45,6 +53,8 @@ async def list_sales(
         business_unit_id=business_unit_id,
         date_from=date_from,
         date_to=date_to,
+        status=status,
+        payment_method=payment_method,
     )
     total = await db.sales.count_documents(query)
     cursor = db.sales.find(query).sort("sold_at", -1).skip(skip).limit(limit)
@@ -55,3 +65,36 @@ async def list_sales(
 @router.get("/{sale_id}", response_model=SaleOut)
 async def get_sale_detail(sale_id: str, db: DBDep, user: CurrentUser) -> SaleOut:
     return sale_out_from_doc(await get_sale(db, sale_id))
+
+
+@router.patch("/{sale_id}/status", response_model=SaleOut)
+async def change_sale_status(
+    sale_id: str,
+    payload: SaleStatusUpdate,
+    db: DBDep,
+    user: CurrentUser,
+) -> SaleOut:
+    """Advance an order: PENDING → PREPARING → READY → SERVED, or cancel."""
+    doc = await update_sale_status(
+        db,
+        sale_id,
+        payload.status,
+        actor_id=str(user["_id"]),
+        actor_username=user["username"],
+        actor_role=user["role"],
+    )
+    return sale_out_from_doc(doc)
+
+
+@router.delete("/{sale_id}", response_model=SaleOut)
+async def cancel_sale(sale_id: str, db: DBDep, user: CurrentUser) -> SaleOut:
+    """Cancel an order (pre-SERVED). Stock restored once; audited."""
+    doc = await update_sale_status(
+        db,
+        sale_id,
+        "CANCELLED",
+        actor_id=str(user["_id"]),
+        actor_username=user["username"],
+        actor_role=user["role"],
+    )
+    return sale_out_from_doc(doc)

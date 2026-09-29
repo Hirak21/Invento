@@ -103,7 +103,43 @@ export function SalesPage() {
           No sales recorded for this period.
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+        <>
+          {/* Mobile: card list (no horizontal scrolling) */}
+          <ul className="space-y-2 md:hidden">
+            {sales.map((sale) => (
+              <li key={sale.id} className="rounded-lg border border-slate-200 bg-white p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-slate-900">
+                      {sale.room_number ? `Room ${sale.room_number} · ` : ''}{sale.sale_number}
+                    </p>
+                    <p className="text-xs text-slate-500">{formatDate(sale.sold_at)}</p>
+                  </div>
+                  <span className="shrink-0 text-sm font-bold text-slate-900">
+                    ₹{Number(sale.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <p className="mt-1 truncate text-xs text-slate-500">
+                  {sale.items.length === 1
+                    ? `${sale.items[0].quantity} × ${sale.items[0].item_name}`
+                    : `${sale.items.reduce((n, line) => n + line.quantity, 0)} units of ${sale.items.length} items`}
+                </p>
+                <p className="mt-1 flex items-center gap-2 text-xs">
+                  <span className="text-slate-500">{formatPaymentMethod(sale.payment_method)}</span>
+                  {sale.order_status === 'CANCELLED' ? (
+                    <Badge tone="out">cancelled</Badge>
+                  ) : sale.order_status !== 'SERVED' ? (
+                    <Badge tone="low">{sale.order_status.toLowerCase()}</Badge>
+                  ) : (
+                    <Badge tone="healthy">completed</Badge>
+                  )}
+                </p>
+              </li>
+            ))}
+          </ul>
+
+          {/* Desktop: table */}
+          <div className="hidden overflow-x-auto rounded-lg border border-slate-200 bg-white md:block">
           <table className="w-full min-w-[640px] text-left text-sm">
             <thead>
               <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-400">
@@ -135,7 +171,8 @@ export function SalesPage() {
               ))}
             </tbody>
           </table>
-        </div>
+          </div>
+        </>
       )}
 
       <SaleFormModal

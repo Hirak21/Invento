@@ -89,10 +89,11 @@ async def build_summary(
         result = await db[collection].aggregate(pipeline).to_list(1)
         return _decimal128_to_str(result[0]["total"]) if result else "0.00"
 
-    total_sales, total_purchases, total_expenses = await asyncio.gather(
+    total_sales, total_purchases, total_expenses, total_wastage = await asyncio.gather(
         sum_field("sales", sales_match, "total_amount"),
         sum_field("purchases", purchase_match, "total_amount"),
         sum_field("expenses", expense_match, "amount"),
+        sum_field("wastage", {"wasted_at": {"$gte": range_start, "$lt": range_end}}, "estimated_value"),
     )
 
     sale_count = await db.sales.count_documents(sales_match)
@@ -179,6 +180,12 @@ async def build_summary(
         await db.expenses.find({}, {"expense_number": 1, "amount": 1, "description": 1, "spent_at": 1})
         .sort("spent_at", DESCENDING).limit(5).to_list(5)
     )
+    recent_wastages = (
+        await db.wastage.find(
+            {"wasted_at": {"$gte": range_start, "$lt": range_end}}, {"item_name": 1, "estimated_value": 1, "wasted_at": 1}
+        )
+        .sort("wasted_at", DESCENDING).limit(5).to_list(5)
+    )
     activity: list[dict[str, Any]] = []
     for doc in recent_sales:
         activity.append({"type": "sale", "number": doc["sale_number"], "label": "Sale", "amount": doc["total_amount"], "at": doc["sold_at"]})
@@ -186,6 +193,8 @@ async def build_summary(
         activity.append({"type": "purchase", "number": doc["purchase_number"], "label": "Purchase", "amount": doc["total_amount"], "at": doc["purchased_at"]})
     for doc in recent_expenses:
         activity.append({"type": "expense", "number": doc["expense_number"], "label": doc.get("description") or "Expense", "amount": doc["amount"], "at": doc["spent_at"]})
+    for doc in recent_wastages:
+        activity.append({"type": "wastage", "number": "", "label": doc.get("item_name") or "Wastage", "amount": doc.get("estimated_value", "0.00"), "at": doc["wasted_at"]})
     activity.sort(key=lambda entry: entry["at"], reverse=True)
     activity = activity[:8]
 
@@ -230,6 +239,15 @@ async def build_summary(
         for doc in trend_docs
     ]
 
+    # Net balance: sales - purchases - expenses - wastage
+    from app.utils.money import parse_money, money_to_str
+    net_balance = money_to_str(
+        parse_money(total_sales)
+        - parse_money(total_purchases)
+        - parse_money(total_expenses)
+        - parse_money(total_wastage)
+    )
+
     return {
         "period": {
             "from": range_start.isoformat(),
@@ -239,8 +257,10 @@ async def build_summary(
             "sales": total_sales,
             "purchases": total_purchases,
             "expenses": total_expenses,
+            "wastage": total_wastage,
             "sale_count": sale_count,
             "inventory_value": inventory_value,
+            "net_balance": net_balance,
         },
         "business_split": split,
         "low_stock": low_stock,

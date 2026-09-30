@@ -3,7 +3,7 @@ import type { FormEvent } from 'react'
 
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
-import { Modal } from '@/components/ui/Modal'
+import { Modal, shouldAutoFocusForModal } from '@/components/ui/Modal'
 import { Select } from '@/components/ui/Select'
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
 import { listItems } from '@/services/masterData'
@@ -98,6 +98,8 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
     setSelectedMenuTab('items')
     setSelectedMenuItem(null)
     setMenuItems([])
+    // Desktop only: mobile must not pop the keyboard on modal open.
+    if (!shouldAutoFocusForModal()) return
     setTimeout(() => {
       if (selectedMenuTab === 'items') {
         searchRef.current?.focus()

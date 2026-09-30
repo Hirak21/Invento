@@ -60,7 +60,8 @@ export function ReportsPage() {
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Reports</h1>
         <p className="mt-1 text-sm text-slate-500">
-          Sales, purchases, expenses, wastage and stock movements for the chosen period, as an Excel workbook.
+          Sales, purchases, expenses and stock &amp; wastage for the chosen period, plus an executive summary with
+          live formulas. Wastage is shown as a separate non-cash memo (stock was already paid at purchase).
         </p>
       </div>
 

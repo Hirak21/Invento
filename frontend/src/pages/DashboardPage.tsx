@@ -1,25 +1,24 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
-import { Badge } from '@/components/ui/Select'
 import { Button } from '@/components/ui/Button'
-import { Card, EmptyState } from '@/components/ui/Card'
-import { Input } from '@/components/ui/Input'
+import { Card } from '@/components/ui/Card'
+import { StatusBadge } from '@/components/ui/Select'
 import { SaleFormModal } from '@/features/sales/SaleFormModal'
+import { ReceiptModal } from '@/features/billing/ReceiptModal'
+import { RestaurantOrderSheet } from '@/features/restaurant/RestaurantOrderSheet'
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
-import { listBusinessUnits } from '@/services/masterData'
-import type { BusinessUnit } from '@/types/master'
 import { fetchSummary } from '@/services/dashboard'
-import type { DashboardSummary, Period } from '@/services/dashboard'
-import { formatMoney } from '@/types/inventory'
-import type { StockStatus } from '@/types/inventory'
-import { cn } from '@/utils/cn'
-
-const PERIOD_TABS: { id: Period; label: string }[] = [
-  { id: 'today', label: 'Today' },
-  { id: '7d', label: '7 Days' },
-  { id: 'month', label: 'This Month' },
-  { id: 'custom', label: 'Custom' },
-]
+import type { DashboardSummary } from '@/services/dashboard'
+import { listRestaurantOrders } from '@/services/restaurantOrders'
+import type { Sale } from '@/types/sale'
+import {
+  CartIcon,
+  ClipboardListIcon,
+  CubeTransparentIcon,
+  PlusIcon,
+  BellAlertIcon,
+} from '@/components/icons'
 
 function greeting(): string {
   const hour = new Date().getHours()
@@ -28,293 +27,313 @@ function greeting(): string {
   return 'Good evening'
 }
 
-function StatCard({
-  title,
-  value,
-  note,
-  tone,
-}: {
-  title: string
-  value: string
-  note?: string
-  tone?: 'default' | 'warning' | 'danger'
-}) {
-  return (
-    <Card>
-      <p className="text-sm font-medium text-slate-500">{title}</p>
-      <p className={cn('mt-2 text-2xl font-semibold', tone === 'danger' ? 'text-red-600' : tone === 'warning' ? 'text-amber-600' : 'text-slate-900')}>
-        {value}
-      </p>
-      {note && <p className="mt-1 text-xs text-slate-400">{note}</p>}
-    </Card>
-  )
+function todayLabel(): string {
+  return new Date().toLocaleDateString('en-IN', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  })
+}
+
+function money(value: string | number): string {
+  return `₹${Number(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+}
+
+function elapsedMinutes(iso: string): number {
+  return Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000))
+}
+
+function elapsedLabel(iso: string): string {
+  const m = elapsedMinutes(iso)
+  if (m < 60) return `${m}m waiting`
+  return `${Math.floor(m / 60)}h ${m % 60}m waiting`
 }
 
 export function DashboardPage() {
-  const { selectedBuId } = useBusinessUnit()
-  const [period, setPeriod] = useState<Period>('today')
-  const [customFrom, setCustomFrom] = useState('')
-  const [customTo, setCustomTo] = useState('')
+  const { selectedBuId, units, buStatus, buError, refreshUnits, setSelectedBuId } = useBusinessUnit()
+  const navigate = useNavigate()
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
+  const [orders, setOrders] = useState<Sale[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [businessUnits, setBusinessUnits] = useState<BusinessUnit[]>([])
   const [saleModalOpen, setSaleModalOpen] = useState(false)
+  const [orderSheetOpen, setOrderSheetOpen] = useState(false)
+  const [receiptOpen, setReceiptOpen] = useState(false)
+
+  const invalidStoredUnit =
+    buStatus === 'ready' && selectedBuId !== null && units.length > 0 && !units.some((u) => u.id === selectedBuId)
 
   const load = useCallback(async () => {
-    if (period === 'custom' && (!customFrom || !customTo)) {
-      setSummary(null)
-      setLoading(false)
-      return
-    }
+    // Don't fetch with a stale ID while units are still validating.
+    if (buStatus === 'validating') return
     setLoading(true)
+    setError(null)
     try {
-      const data = await fetchSummary({
-        period,
-        from: customFrom,
-        to: customTo,
-      })
-      setSummary(data)
-      setError(null)
+      const buParam = selectedBuId ?? undefined
+      const [summaryData, ordersRes] = await Promise.all([
+        fetchSummary({ period: 'today', business_unit_id: buParam }),
+        listRestaurantOrders({ business_unit_id: buParam, status: 'active' }),
+      ])
+      setSummary(summaryData)
+      setOrders(ordersRes.orders ?? [])
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load the dashboard.')
+      // Keep previous good data on refresh failure; only fresh load shows empty.
+      setError(err instanceof Error ? err.message : 'Could not load today’s status.')
     } finally {
       setLoading(false)
     }
-  }, [period, customFrom, customTo])
+  }, [selectedBuId, buStatus])
 
   useEffect(() => {
     void load()
-  }, [load, selectedBuId])
+  }, [load])
 
-  useEffect(() => {
-    void listBusinessUnits().then(setBusinessUnits).catch(() => undefined)
-  }, [])
+  function handleRetry() {
+    // Re-validate units first so a stale stored ID can't poison the retry.
+    refreshUnits()
+    void load()
+  }
 
-  const maxTrend = summary
-    ? Math.max(...summary.sales_trend.map((point) => Number(point.total)), 1)
-    : 1
+  function handleResetUnit() {
+    setSelectedBuId(null)
+  }
+
+  const salesToday = summary ? Number(summary.totals.sales) : 0
+  const salesCount = summary?.totals.sale_count ?? 0
+  const lowStock = summary?.low_stock ?? []
+  const outOfStock = lowStock.filter((i) => i.status === 'out')
+  const oldestOrder = orders.length
+    ? [...orders].sort((a, b) => +new Date(a.sold_at) - +new Date(b.sold_at))[0]
+    : null
+
+  const attentionCount =
+    (oldestOrder ? 1 : 0) + outOfStock.length + Math.min(lowStock.filter((i) => i.status === 'low').length, 3)
 
   return (
-    <div className="space-y-6">
-      {/* Header: greeting + period tabs + quick-add button */}
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">
-            {greeting()}
-            {(summary?.totals.sale_count ?? 0) > 0 && (
-              <span className="ml-2 text-base font-normal text-slate-500">
-                · {summary?.totals.sale_count} sale{summary?.totals.sale_count === 1 ? '' : 's'} this period
-              </span>
-            )}
-          </h1>
-          <p className="mt-1 text-sm text-slate-500">Here is where your business stands.</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-white p-1">
-          {PERIOD_TABS.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setPeriod(tab.id)}
-              className={cn(
-                'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
-                period === tab.id ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-100',
-              )}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+    <div className="space-y-5">
+      {/* Context header — no period tabs, no finance-first copy */}
+      <div>
+        <h1 className="text-2xl font-bold text-slate-900">
+          {greeting()}
+        </h1>
+        <p className="mt-0.5 text-sm font-medium text-slate-600">{todayLabel()}</p>
       </div>
 
-      {/* Quick action: + New Sale — always visible, top-right area on mobile too */}
-      <div className="flex justify-end">
-        <Button
-          onClick={() => {
-            setSaleModalOpen(true)
-          }}
-          size="sm"
-          className="shadow-sm"
-        >
-          + New Sale
-        </Button>
-      </div>
+      {invalidStoredUnit && (
+        <div role="alert" className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3">
+          <p className="text-sm font-medium text-amber-900">
+            The saved business unit is no longer available. Showing all units instead.
+          </p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={handleResetUnit}>
+            Reset to All units
+          </Button>
+        </div>
+      )}
 
-      {period === 'custom' && (
-        <div className="grid max-w-md grid-cols-2 gap-3">
-          <Input label="From" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
-          <Input label="To" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
+      {buStatus === 'error' && (
+        <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
+          <p className="text-sm font-medium text-red-800">{buError ?? 'Could not load business units.'}</p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={handleRetry}>
+            Retry
+          </Button>
         </div>
       )}
 
       {error && (
-        <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
-        </p>
+        <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
+          <p className="text-sm font-medium text-red-800">{error}</p>
+          <p className="mt-1 text-xs text-red-700">
+            {summary ? 'Showing last good data. Retry to refresh.' : 'Nothing loaded yet. Retry to re-fetch.'}
+          </p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={handleRetry}>
+            Retry
+          </Button>
+        </div>
       )}
 
-      {loading && !summary ? (
-        <p className="py-12 text-center text-sm text-slate-500">Loading dashboard…</p>
-      ) : !summary ? (
-        <EmptyState message="Pick a date range to see your numbers." />
-      ) : (
-        <>
-          {/* Primary cards */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard title="Total Sales" value={formatMoney(summary.totals.sales)} />
-            <StatCard title="Purchases" value={formatMoney(summary.totals.purchases)} />
-            <StatCard title="Expenses" value={formatMoney(summary.totals.expenses)} />
-            <StatCard
-              title="Low Stock"
-              value={`${summary.low_stock.length} item${summary.low_stock.length === 1 ? '' : 's'}`}
-              tone={summary.low_stock.length > 0 ? 'warning' : 'default'}
-              note={`Inventory at cost: ${formatMoney(summary.totals.inventory_value)}`}
-            />
+      {/* TODAY — what is happening right now */}
+      <section aria-labelledby="today-heading">
+        <h2 id="today-heading" className="mb-2 text-xs font-bold uppercase tracking-widest text-slate-500">
+          Today
+        </h2>
+        {buStatus === 'validating' || (loading && !summary) ? (
+          <div className="grid grid-cols-2 gap-3" aria-label="Loading today's status">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="skeleton h-24 rounded-2xl" />
+            ))}
           </div>
-
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {/* Sales trend */}
-            <Card title="Sales trend">
-              {summary.sales_trend.length === 0 ? (
-                <EmptyState message="No sales recorded in this period yet." />
-              ) : (
-                <div className="flex h-36 items-end gap-1.5">
-                  {summary.sales_trend.map((point) => (
-                    <div key={point.date} className="group flex min-w-0 flex-1 flex-col items-center gap-1">
-                      <span className="w-max rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100">
-                        ₹{Number(point.total).toFixed(0)}
-                      </span>
-                      <div
-                        className="w-full rounded-t bg-indigo-500/80 transition-colors group-hover:bg-indigo-600"
-                        style={{ height: `${Math.max(6, (Number(point.total) / maxTrend) * 110)}px` }}
-                        aria-hidden="true"
-                      />
-                      <span className="max-w-full truncate text-[10px] text-slate-400">
-                        {point.date.slice(5)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Card>
-
-            {/* Business split */}
-            <Card title="Restaurant vs Shop">
-              {summary.business_split.length === 0 ? (
-                <EmptyState message="No business units configured yet. Add them in Settings." />
-              ) : (
-                <ul className="space-y-4">
-                  {summary.business_split.map((unit) => {
-                    const totalSales = summary.business_split.reduce(
-                      (sum, u) => sum + Number(u.sales),
-                      0,
-                    )
-                    const share = totalSales > 0 ? (Number(unit.sales) / totalSales) * 100 : 0
-                    return (
-                      <li key={unit.business_unit_id}>
-                        <div className="mb-1 flex items-center justify-between text-sm">
-                          <span className="font-medium text-slate-700">{unit.name}</span>
-                          <span className="tabular-nums text-slate-600">
-                            {formatMoney(unit.sales)}
-                            <span className="ml-2 text-xs text-slate-400">
-                              buys {formatMoney(unit.purchases)} · exp {formatMoney(unit.expenses)}
-                            </span>
-                          </span>
-                        </div>
-                        <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-                          <div
-                            className="h-full rounded-full bg-indigo-500 transition-all"
-                            style={{ width: `${share}%` }}
-                            role="presentation"
-                          />
-                        </div>
-                      </li>
-                    )
-                  })}
-                </ul>
-              )}
-            </Card>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {/* Low stock */}
-            <Card title="Low stock alerts">
-              {summary.low_stock.length === 0 ? (
-                <EmptyState message="No low-stock items." />
-              ) : (
-                <ul className="divide-y divide-slate-100">
-                  {summary.low_stock.map((entry) => (
-                    <li key={entry.item_id} className="flex items-center justify-between py-2.5 text-sm">
-                      <span className="font-medium text-slate-800">{entry.item_name}</span>
-                      <span className="flex items-center gap-3 text-slate-600">
-                        <span className="tabular-nums">
-                          {entry.current_stock}/{entry.min_stock_level} {entry.base_unit}
-                        </span>
-                        <Badge tone={entry.status as StockStatus}>{entry.status}</Badge>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </Card>
-
-            {/* Top selling */}
-            <Card title="Top selling">
-              {summary.top_selling.length === 0 ? (
-                <EmptyState message="No sales recorded in this period yet." />
-              ) : (
-                <ol className="divide-y divide-slate-100">
-                  {summary.top_selling.map((entry, index) => (
-                    <li key={entry.item_id} className="flex items-center justify-between py-2.5 text-sm">
-                      <span className="min-w-0">
-                        <span className="mr-2 text-xs font-bold text-indigo-600">#{index + 1}</span>
-                        <span className="font-medium text-slate-800">{entry.item_name}</span>
-                      </span>
-                      <span className="shrink-0 text-slate-600 tabular-nums">
-                        {entry.quantity_sold} sold · {formatMoney(entry.revenue)}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </Card>
-          </div>
-
-          {/* Recent activity */}
-          <Card title="Recent activity">
-            {summary.recent_activity.length === 0 ? (
-              <EmptyState message="Nothing recorded yet — start with a purchase or sale." />
-            ) : (
-              <ul className="divide-y divide-slate-100">
-                {summary.recent_activity.map((entry, index) => (
-                  <li key={`${entry.number}-${index}`} className="flex flex-wrap items-center justify-between gap-2 py-2.5 text-sm">
-                    <span className="flex items-center gap-2">
-                      <Badge tone={entry.type === 'sale' ? 'healthy' : entry.type === 'purchase' ? 'low' : 'neutral'}>
-                        {entry.type}
-                      </Badge>
-                      <span className="font-medium text-slate-800">{entry.label}</span>
-                      <span className="text-xs text-slate-400">{entry.number}</span>
-                    </span>
-                    <span className="flex items-center gap-3 text-slate-500 tabular-nums">
-                      {formatMoney(entry.amount)}
-                      <span className="text-xs text-slate-400">
-                        {new Date(entry.at).toLocaleString('en-IN', {
-                          day: 'numeric',
-                          month: 'short',
-                          hour: 'numeric',
-                          minute: '2-digit',
-                        })}
-                      </span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
+        ) : error && !summary ? (
+          <Card>
+            <p className="text-center text-sm font-semibold text-slate-900">Could not load today’s status.</p>
+            <p className="mt-0.5 text-center text-xs text-slate-500">
+              Check your connection or business unit, then retry.
+            </p>
+            <div className="mt-3 flex justify-center">
+              <Button variant="outline" size="sm" onClick={handleRetry}>
+                Retry
+              </Button>
+            </div>
           </Card>
-        </>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => navigate('/sales')}
+              className="col-span-2 rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-colors active:bg-slate-50 min-h-[96px]"
+            >
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">
+                <CartIcon className="h-4 w-4" /> Sales overview
+              </span>
+              <span className="mt-1 block text-2xl font-bold tabular-nums text-slate-900">{money(salesToday)}</span>
+              <span className="text-xs font-medium text-slate-500">
+                {salesCount} bill{salesCount === 1 ? '' : 's'} today → tap for history
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/rooms')}
+              className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-colors active:bg-slate-50 min-h-[96px]"
+            >
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">
+                <ClipboardListIcon className="h-4 w-4" /> Active orders
+              </span>
+              <span className="mt-1 block text-2xl font-bold tabular-nums text-slate-900">{orders.length}</span>
+              <span className="text-xs font-medium text-slate-500">
+                {orders.length === 0 ? 'Kitchen is clear' : 'Need action'}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/stock-alerts')}
+              className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-colors active:bg-slate-50 min-h-[96px]"
+            >
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">
+                <CubeTransparentIcon className="h-4 w-4" /> Low stock
+              </span>
+              <span className={`mt-1 block text-2xl font-bold tabular-nums ${lowStock.length ? 'text-amber-700' : 'text-slate-900'}`}>
+                {lowStock.length}
+              </span>
+              <span className="text-xs font-medium text-slate-500">
+                {outOfStock.length ? `${outOfStock.length} out of stock` : lowStock.length ? 'Needs restock' : 'All stocked'}
+              </span>
+            </button>
+          </div>
+        )}
+      </section>
+
+      {/* QUICK ACTIONS — what can I do immediately */}
+      <section aria-labelledby="actions-heading">
+        <h2 id="actions-heading" className="mb-2 text-xs font-bold uppercase tracking-widest text-slate-500">
+          Quick actions
+        </h2>
+        <div className="grid grid-cols-2 gap-3">
+          <Button size="lg" fullWidth onClick={() => setSaleModalOpen(true)} leftIcon={<PlusIcon className="h-5 w-5" />}>
+            New sale
+          </Button>
+          <Button size="lg" variant="secondary" fullWidth onClick={() => setOrderSheetOpen(true)} leftIcon={<ClipboardListIcon className="h-5 w-5" />}>
+            Restaurant order
+          </Button>
+          <Button
+            size="lg"
+            variant="outline"
+            fullWidth
+            onClick={() => setReceiptOpen(true)}
+            leftIcon={<BellAlertIcon className="h-5 w-5" />}
+            className="col-span-2"
+          >
+            Receipts / Billing
+          </Button>
+        </div>
+      </section>
+
+      {/* NEEDS ATTENTION — actionable alerts only */}
+      <section aria-labelledby="attention-heading">
+        <h2 id="attention-heading" className="mb-2 text-xs font-bold uppercase tracking-widest text-slate-500">
+          Needs attention{attentionCount > 0 ? ` (${attentionCount})` : ''}
+        </h2>
+        {loading && !summary ? (
+          <div className="space-y-2" aria-label="Loading alerts">
+            {[0, 1].map((i) => (
+              <div key={i} className="skeleton h-20 rounded-2xl" />
+            ))}
+          </div>
+        ) : attentionCount === 0 ? (
+          <Card>
+            <p className="text-center text-sm font-semibold text-slate-900">All clear 🎉</p>
+            <p className="mt-0.5 text-center text-xs text-slate-500">No pending orders, no stock-outs.</p>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            {oldestOrder && (
+              <button
+                type="button"
+                onClick={() => navigate('/rooms')}
+                className="w-full rounded-2xl border-2 border-amber-300 bg-amber-50 p-4 text-left transition-colors active:bg-amber-100 min-h-[88px]"
+              >
+                <span className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-bold text-slate-900">
+                    {oldestOrder.room_number ? `Room ${oldestOrder.room_number}` : 'Walk-in'} · {oldestOrder.sale_number}
+                  </span>
+                  {oldestOrder.order_status && <StatusBadge status={oldestOrder.order_status} size="sm" />}
+                </span>
+                <span className="mt-1 block truncate text-sm text-slate-700">
+                  {oldestOrder.items.map((l) => `${l.item_name} ×${l.quantity}`).join(' · ')}
+                </span>
+                <span className="mt-1 block text-xs font-bold text-amber-800">{elapsedLabel(oldestOrder.sold_at)} → tap to work the order</span>
+              </button>
+            )}
+            {outOfStock.slice(0, 2).map((item) => (
+              <button
+                key={item.item_id}
+                type="button"
+                onClick={() => navigate('/inventory')}
+                className="w-full rounded-2xl border-2 border-red-200 bg-red-50 p-4 text-left transition-colors active:bg-red-100 min-h-[72px]"
+              >
+                <span className="text-sm font-bold text-slate-900">{item.item_name} — out of stock</span>
+                <span className="mt-0.5 block text-xs font-medium text-red-800">0 {item.base_unit} left → tap to restock</span>
+              </button>
+            ))}
+            {lowStock
+              .filter((i) => i.status === 'low')
+              .slice(0, 3 - Math.min(outOfStock.length, 2))
+              .map((item) => (
+                <button
+                  key={item.item_id}
+                  type="button"
+                  onClick={() => navigate('/inventory')}
+                  className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-colors active:bg-slate-50 min-h-[72px]"
+                >
+                  <span className="text-sm font-bold text-slate-900">
+                    {item.item_name} — {item.current_stock}/{item.min_stock_level} {item.base_unit}
+                  </span>
+                  <span className="mt-0.5 block text-xs font-medium text-slate-500">Running low → tap to restock</span>
+                </button>
+              ))}
+          </div>
+        )}
+      </section>
+
+      {/* Money — secondary, plain high-contrast rows, no charts */}
+      {summary && (
+        <section aria-labelledby="money-heading">
+          <h2 id="money-heading" className="mb-2 text-xs font-bold uppercase tracking-widest text-slate-500">
+            Today’s money
+          </h2>
+          <Card padding="none" className="divide-y divide-slate-100 overflow-hidden">
+            {[
+              { label: 'Sales', value: money(summary.totals.sales) },
+              { label: 'Purchases', value: money(summary.totals.purchases) },
+              { label: 'Expenses', value: money(summary.totals.expenses) },
+            ].map((row) => (
+              <div key={row.label} className="flex items-center justify-between px-4 py-3">
+                <span className="text-sm font-medium text-slate-600">{row.label}</span>
+                <span className="text-sm font-bold tabular-nums text-slate-900">{row.value}</span>
+              </div>
+            ))}
+          </Card>
+        </section>
       )}
 
-      {/* Sale form modal — opens from dashboard + button */}
       <SaleFormModal
         open={saleModalOpen}
         onClose={() => setSaleModalOpen(false)}
@@ -322,7 +341,17 @@ export function DashboardPage() {
           setSaleModalOpen(false)
           void load()
         }}
-        businessUnits={businessUnits}
+        businessUnits={units}
+      />
+      <ReceiptModal
+        open={receiptOpen}
+        onClose={() => setReceiptOpen(false)}
+        businessUnitId={selectedBuId ?? undefined}
+      />
+      <RestaurantOrderSheet
+        open={orderSheetOpen}
+        onClose={() => setOrderSheetOpen(false)}
+        onSent={() => void load()}
       />
     </div>
   )

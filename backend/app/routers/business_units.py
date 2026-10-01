@@ -17,6 +17,8 @@ def bu_out(doc: dict) -> BusinessUnitOut:
         name=doc["name"],
         location=doc.get("location"),
         active=doc.get("active", True),
+        # Additive field: legacy units predate it and read as retail.
+        unit_type=doc.get("unit_type", "retail"),
         created_at=doc["created_at"],
     )
 
@@ -39,6 +41,7 @@ async def create_business_unit(
     doc = {
         "name": payload.name.strip(),
         "location": payload.location,
+        "unit_type": payload.unit_type,
         "active": True,
         "created_at": utc_now(),
     }

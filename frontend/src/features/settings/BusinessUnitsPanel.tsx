@@ -14,6 +14,7 @@ export function BusinessUnitsPanel() {
   const [loading, setLoading] = useState(true)
   const [name, setName] = useState('')
   const [location, setLocation] = useState('')
+  const [unitType, setUnitType] = useState<'restaurant' | 'retail'>('retail')
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -39,14 +40,25 @@ export function BusinessUnitsPanel() {
     setPending(true)
     setError(null)
     try {
-      await createBusinessUnit(name.trim(), location.trim() || undefined)
+      await createBusinessUnit(name.trim(), location.trim() || undefined, unitType)
       setName('')
       setLocation('')
+      setUnitType('retail')
       await reload()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create business unit.')
     } finally {
       setPending(false)
+    }
+  }
+
+  async function changeType(unit: BusinessUnit, next: 'restaurant' | 'retail') {
+    if (next === unit.unit_type) return
+    try {
+      await updateBusinessUnit(unit.id, { unit_type: next })
+      await reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not change unit type.')
     }
   }
 
@@ -90,6 +102,18 @@ export function BusinessUnitsPanel() {
             placeholder="e.g. MG Road"
             maxLength={200}
           />
+          <label className="flex flex-col text-xs font-medium text-slate-600">
+            Type
+            <select
+              value={unitType}
+              onChange={(e) => setUnitType(e.target.value as 'restaurant' | 'retail')}
+              className="mt-1 rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm"
+              aria-label="Business unit type"
+            >
+              <option value="retail">Retail / shop (sale opens on Items)</option>
+              <option value="restaurant">Restaurant / kitchen (sale opens on Menu)</option>
+            </select>
+          </label>
           <Button type="submit" pending={pending} className="sm:mb-0.5">
             Add unit
           </Button>
@@ -134,6 +158,9 @@ export function BusinessUnitsPanel() {
                     {unit.location && (
                       <span className="ml-2 text-sm text-slate-400">{unit.location}</span>
                     )}
+                    <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
+                      {unit.unit_type === 'restaurant' ? 'Restaurant' : 'Retail'}
+                    </span>
                     {!unit.active && (
                       <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
                         Inactive
@@ -143,7 +170,16 @@ export function BusinessUnitsPanel() {
                 )}
               </div>
               {isOwner && editingId !== unit.id && (
-                <span className="flex gap-2">
+                <span className="flex flex-wrap gap-2">
+                  <select
+                    value={unit.unit_type ?? 'retail'}
+                    onChange={(e) => void changeType(unit, e.target.value as 'restaurant' | 'retail')}
+                    className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                    aria-label={`Type for ${unit.name}`}
+                  >
+                    <option value="retail">Retail</option>
+                    <option value="restaurant">Restaurant</option>
+                  </select>
                   <Button
                     size="sm"
                     variant="secondary"

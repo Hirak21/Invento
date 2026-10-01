@@ -137,9 +137,11 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
   }, [open, businessUnitId, selectedMenuTab])
 
   useEffect(() => {
-    if (!open || !businessUnitId || paymentMethod !== 'room_charge') return
+    if (!open || paymentMethod !== 'room_charge') return
     let cancelled = false
-    Promise.all([listRooms({ business_unit_id: businessUnitId, status: 'occupied' }), listStays({ business_unit_id: businessUnitId, status: 'open' })])
+    // Rooms/stays are property-level: offer every open stay regardless of
+    // the sale's unit (the backend records the sale under the selling unit).
+    Promise.all([listRooms({ status: 'occupied' }), listStays({ status: 'open' })])
       .then(([roomsRes, staysRes]) => {
         if (cancelled) return
         setRooms(roomsRes.rooms)
@@ -151,7 +153,7 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
     return () => {
       cancelled = true
     }
-  }, [open, businessUnitId, paymentMethod])
+  }, [open, paymentMethod])
 
   function addItemToCart(item: InventoryItem) {
     setError(null)

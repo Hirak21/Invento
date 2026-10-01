@@ -63,6 +63,9 @@ async def create_sale(
     # Charge-to-room: validate the stay BEFORE the transaction, then enforce
     # it is still open INSIDE the transaction (guest may check out between the
     # two). Charges attach to the sale once - no duplicate billing records.
+    # Rooms are property-level, so the stay may belong to any unit: the sale
+    # is recorded under the selling unit (reports stay scoped) while the
+    # charge lands on the stay's bill exactly once via the idempotency key.
     stay_doc: dict[str, Any] | None = None
     if payload.payment_method == "room_charge":
         if not payload.stay_id or not is_oid(payload.stay_id):
@@ -70,8 +73,6 @@ async def create_sale(
         stay_doc = await db.stays.find_one({"_id": oid(payload.stay_id)})
         if stay_doc is None or stay_doc.get("status") != "open":
             raise BusinessRuleError("This stay is not open. The guest may have checked out.")
-        if stay_doc["business_unit_id"] != payload.business_unit_id:
-            raise BusinessRuleError("The stay does not belong to this business unit.")
     elif payload.stay_id is not None:
         raise BusinessRuleError("stay_id can only be used with the room_charge payment method.")
 

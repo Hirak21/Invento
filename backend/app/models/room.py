@@ -14,6 +14,11 @@ class RoomCreate(BaseModel):
     room_number: str = Field(min_length=1, max_length=20)
 
 
+class RoomUpdate(BaseModel):
+    room_number: str | None = Field(default=None, min_length=1, max_length=20)
+    active: bool | None = None
+
+
 class RoomOut(BaseModel):
     id: str
     business_unit_id: str

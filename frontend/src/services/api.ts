@@ -47,10 +47,29 @@ export async function apiFetch<T>(path: string, options: ApiRequestOptions = {})
       // Token expired or revoked — clear so RequireAuth sends user to login.
       localStorage.removeItem(TOKEN_KEY)
     }
-    const detail =
-      typeof data === 'object' && data !== null && 'detail' in data
-        ? String((data as { detail: unknown }).detail)
-        : 'Something went wrong. Please try again.'
+    // FastAPI validation errors arrive as { detail: [{ loc, msg, ... }] } —
+    // join the messages so the user sees "body → quantity: ..." instead of
+    // "[object Object]". Domain errors are already { detail: string }.
+    let detail = 'Something went wrong. Please try again.'
+    if (typeof data === 'object' && data !== null && 'detail' in data) {
+      const raw = (data as { detail: unknown }).detail
+      if (typeof raw === 'string') detail = raw
+      else if (Array.isArray(raw)) {
+        const msgs = raw
+          .map((e) => {
+            if (typeof e === 'string') return e
+            if (typeof e === 'object' && e !== null && 'msg' in e) {
+              const loc = 'loc' in e && Array.isArray((e as { loc: unknown }).loc)
+                ? (e as { loc: unknown[] }).loc.slice(1).join(' → ')
+                : ''
+              return loc ? `${loc}: ${String((e as { msg: unknown }).msg)}` : String((e as { msg: unknown }).msg)
+            }
+            return null
+          })
+          .filter(Boolean)
+        if (msgs.length > 0) detail = msgs.join('; ')
+      }
+    }
     throw new ApiError(response.status, detail)
   }
 

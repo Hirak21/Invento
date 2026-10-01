@@ -6,8 +6,8 @@ import { Input } from '@/components/ui/Input'
 import { Modal } from '@/components/ui/Modal'
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
 import { listItems } from '@/services/masterData'
-import { addRecipeIngredient, createRecipe, removeRecipeIngredient, updateRecipe } from '@/services/recipes'
-import type { Recipe, RecipeIngredient, RecipeWithIngredients } from '@/types/recipe'
+import { addRecipeIngredient, createRecipe, getCompatibleUnits, removeRecipeIngredient, updateRecipe } from '@/services/recipes'
+import type { RecipeWithIngredients } from '@/types/recipe'
 import type { BusinessUnit } from '@/types/master'
 
 interface RecipeFormModalProps {
@@ -18,17 +18,31 @@ interface RecipeFormModalProps {
   businessUnits?: BusinessUnit[]
 }
 
+interface DraftIngredient {
+  clientId: string
+  item_id: string
+  item_name: string
+  quantity: number
+  unit: string
+  notes: string | null
+}
+
+const MONEY_RE = /^\d{1,12}(\.\d{1,2})?$/
+
 export function RecipeFormModal({ open, onClose, onSaved, initial, businessUnits }: RecipeFormModalProps) {
   const { selectedBuId } = useBusinessUnit()
   const [businessUnitId, setBusinessUnitId] = useState('')
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [active, setActive] = useState(true)
-  const [ingredients, setIngredients] = useState<RecipeIngredient[]>([])
+  const [sellingPrice, setSellingPrice] = useState('')
+  const [ingredients, setIngredients] = useState<DraftIngredient[]>([])
   const [search, setSearch] = useState('')
   const [itemResults, setItemResults] = useState<{ id: string; name: string; base_unit: string; current_stock: number; selling_price: string | null }[]>([])
   const [searching, setSearching] = useState(false)
   const [selectedItem, setSelectedItem] = useState<{ id: string; name: string; base_unit: string; current_stock: number; selling_price: string | null } | null>(null)
+  const [compatibleUnits, setCompatibleUnits] = useState<string[]>([])
+  const [chosenUnit, setChosenUnit] = useState('')
   const [quantity, setQuantity] = useState('')
   const [notes, setNotes] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -44,10 +58,13 @@ export function RecipeFormModal({ open, onClose, onSaved, initial, businessUnits
     setName('')
     setDescription('')
     setActive(true)
+    setSellingPrice('')
     setIngredients([])
     setSearch('')
     setItemResults([])
     setSelectedItem(null)
+    setCompatibleUnits([])
+    setChosenUnit('')
     setQuantity('')
     setNotes('')
     setError(null)
@@ -60,7 +77,17 @@ export function RecipeFormModal({ open, onClose, onSaved, initial, businessUnits
       setName(initial.recipe.name)
       setDescription(initial.recipe.description ?? '')
       setActive(initial.recipe.active)
-      setIngredients(initial.ingredients)
+      setSellingPrice(initial.recipe.selling_price ?? '')
+      setIngredients(
+        initial.ingredients.map((ing) => ({
+          clientId: ing.id,
+          item_id: ing.item_id,
+          item_name: ing.item_name,
+          quantity: ing.entered_quantity ?? ing.quantity,
+          unit: ing.entered_unit ?? ing.unit,
+          notes: ing.notes,
+        })),
+      )
       setBusinessUnitId(initial.recipe.business_unit_id)
     }
   }, [initial])
@@ -87,33 +114,48 @@ export function RecipeFormModal({ open, onClose, onSaved, initial, businessUnits
     }
   }, [search, open, runSearch])
 
+  async function pickItem(item: { id: string; name: string; base_unit: string; current_stock: number; selling_price: string | null }) {
+    setSelectedItem({ id: item.id, name: item.name, base_unit: item.base_unit, current_stock: item.current_stock, selling_price: item.selling_price })
+    setSearch('')
+    try {
+      const res = await getCompatibleUnits(item.id)
+      setCompatibleUnits(res.compatible_units.length > 0 ? res.compatible_units : [item.base_unit])
+      setChosenUnit(item.base_unit)
+    } catch {
+      setCompatibleUnits([item.base_unit])
+      setChosenUnit(item.base_unit)
+    }
+    setTimeout(() => quantityRef.current?.focus(), 50)
+  }
+
   function addIngredient(event: FormEvent) {
     event.preventDefault()
     if (!selectedItem) return setError('Select an inventory item first.')
     const qty = Number(quantity)
     if (!qty || qty <= 0) return setError('Enter a valid quantity.')
-    if (qty > (selectedItem.current_stock ?? Infinity)) {
-      return setError(`Only ${selectedItem.current_stock} ${selectedItem.base_unit} of '${selectedItem.name}' in stock.`)
+    if (ingredients.some((ing) => ing.item_id === selectedItem.id)) {
+      return setError(`'${selectedItem.name}' is already in this recipe — remove the existing line to change it.`)
     }
     setError(null)
-    const newIngredient: RecipeIngredient = {
-      id: crypto.randomUUID(),
-      recipe_id: isEditing ? initial!.recipe.id : '',
+    const newIngredient: DraftIngredient = {
+      clientId: crypto.randomUUID(),
       item_id: selectedItem.id,
       item_name: selectedItem.name,
       quantity: qty,
-      unit: selectedItem.base_unit,
+      unit: chosenUnit || selectedItem.base_unit,
       notes: notes.trim() || null,
     }
     setIngredients((prev) => [...prev, newIngredient])
     setSelectedItem(null)
+    setCompatibleUnits([])
+    setChosenUnit('')
     setQuantity('')
     setNotes('')
     searchRef.current?.focus()
   }
 
-  function removeIngredient(id: string) {
-    setIngredients((prev) => prev.filter((ing) => ing.id !== id))
+  function removeIngredient(clientId: string) {
+    setIngredients((prev) => prev.filter((ing) => ing.clientId !== clientId))
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -121,42 +163,48 @@ export function RecipeFormModal({ open, onClose, onSaved, initial, businessUnits
     if (!businessUnitId) return setError('Select a business unit.')
     if (!name.trim()) return setError('Enter a recipe name.')
     if (ingredients.length === 0) return setError('Add at least one ingredient.')
+    if (sellingPrice && !MONEY_RE.test(sellingPrice)) return setError('Enter a valid menu price (e.g. 120.00).')
 
     setSaving(true)
     try {
-      let recipe: Recipe
+      let recipeId: string
       if (isEditing) {
-        recipe = await updateRecipe(initial!.recipe.id, {
+        const updated = await updateRecipe(initial!.recipe.id, {
           name: name.trim(),
           description: description.trim() || null,
           active,
+          selling_price: sellingPrice || null,
         })
-        // Remove existing ingredients and re-add
+        recipeId = updated.recipe.id
+        // Remove existing lines and re-add the edited set.
         for (const ing of initial!.ingredients) {
           try {
             await removeRecipeIngredient(initial!.recipe.id, ing.id)
           } catch {
-            // ignore
+            // ignore — line may already be gone
           }
         }
       } else {
-        recipe = await createRecipe({
+        const created = await createRecipe({
           name: name.trim(),
           business_unit_id: businessUnitId,
           description: description.trim() || undefined,
           active,
+          selling_price: sellingPrice || undefined,
         })
+        recipeId = created.recipe.id
       }
 
       for (const ing of ingredients) {
-        await addRecipeIngredient(recipe.id, {
+        await addRecipeIngredient(recipeId, {
           item_id: ing.item_id,
           quantity: ing.quantity,
+          unit: ing.unit,
           notes: ing.notes || undefined,
         })
       }
 
-      onSaved(recipe.id)
+      onSaved(recipeId)
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save the recipe.')
@@ -189,6 +237,14 @@ export function RecipeFormModal({ open, onClose, onSaved, initial, businessUnits
                 placeholder="Brief description of the recipe"
                 className="min-h-[3.5rem] resize-y"
               />
+              <Input
+                label="Menu price ₹ (optional — needed to sell from the Menu tab)"
+                value={sellingPrice}
+                onChange={(e) => setSellingPrice(e.target.value)}
+                placeholder="e.g. 120.00"
+                inputMode="decimal"
+                autoComplete="off"
+              />
               <div className="flex items-center gap-3">
                 <label className="flex items-center gap-2 text-sm text-slate-700">
                   <input
@@ -210,14 +266,14 @@ export function RecipeFormModal({ open, onClose, onSaved, initial, businessUnits
                 ) : (
                   <ul className="space-y-2">
                     {ingredients.map((ing) => (
-                      <li key={ing.id} className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                      <li key={ing.clientId} className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
                         <div className="min-w-0">
                           <span className="block truncate text-sm font-medium text-slate-900">{ing.item_name}</span>
                           <span className="text-xs text-slate-500">{ing.quantity} {ing.unit}{ing.notes ? ` · ${ing.notes}` : ''}</span>
                         </div>
                         <button
                           type="button"
-                          onClick={() => removeIngredient(ing.id)}
+                          onClick={() => removeIngredient(ing.clientId)}
                           className="shrink-0 rounded-md p-1 text-slate-400 hover:bg-red-50 hover:text-red-600"
                           aria-label={`Remove ${ing.item_name}`}
                         >
@@ -249,11 +305,7 @@ export function RecipeFormModal({ open, onClose, onSaved, initial, businessUnits
                     <li key={item.id}>
                       <button
                         type="button"
-                        onClick={() => {
-                          setSelectedItem({ id: item.id, name: item.name, base_unit: item.base_unit, current_stock: item.current_stock, selling_price: item.selling_price })
-                          setSearch('')
-                          setTimeout(() => quantityRef.current?.focus(), 50)
-                        }}
+                        onClick={() => void pickItem({ id: item.id, name: item.name, base_unit: item.base_unit, current_stock: item.current_stock, selling_price: item.selling_price })}
                         className="flex w-full items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-left transition-colors hover:border-indigo-300 hover:bg-indigo-50/60"
                       >
                         <span className="min-w-0">
@@ -271,23 +323,38 @@ export function RecipeFormModal({ open, onClose, onSaved, initial, businessUnits
                     <span className="font-medium">{selectedItem.name}</span>
                     <span className="text-slate-500"> · {selectedItem.base_unit}</span>
                   </p>
-                  <Input
-                    ref={quantityRef}
-                    label=""
-                    type="number"
-                    min="0.01"
-                    step="0.01"
-                    value={quantity}
-                    onChange={(e) => setQuantity(e.target.value)}
-                    placeholder="Quantity"
-                    autoComplete="off"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        addIngredient(e as unknown as FormEvent)
-                      }
-                    }}
-                  />
+                  <div className="flex gap-2">
+                    <Input
+                      ref={quantityRef}
+                      label=""
+                      type="number"
+                      min="0.001"
+                      step="any"
+                      value={quantity}
+                      onChange={(e) => setQuantity(e.target.value)}
+                      placeholder="Quantity"
+                      autoComplete="off"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          addIngredient(e as unknown as FormEvent)
+                        }
+                      }}
+                    />
+                    <label className="flex shrink-0 flex-col text-xs font-medium text-slate-600">
+                      Unit
+                      <select
+                        value={chosenUnit}
+                        onChange={(e) => setChosenUnit(e.target.value)}
+                        className="mt-1 rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm"
+                        aria-label="Ingredient unit"
+                      >
+                        {(compatibleUnits.length > 0 ? compatibleUnits : [selectedItem.base_unit]).map((u) => (
+                          <option key={u} value={u}>{u}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
                   <Input
                     label=""
                     value={notes}
@@ -302,6 +369,8 @@ export function RecipeFormModal({ open, onClose, onSaved, initial, businessUnits
                     type="button"
                     onClick={() => {
                       setSelectedItem(null)
+                      setCompatibleUnits([])
+                      setChosenUnit('')
                       setSearch('')
                       setTimeout(() => searchRef.current?.focus(), 50)
                     }}

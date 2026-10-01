@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     # Parsed into a list in main.py. Avoids fragile JSON-in-env-var parsing.
     cors_origins: str = "http://localhost:5173"
 
+    # Public base URL of the deployed API (e.g. "https://invento-api.onrender.com").
+    # Used to build absolute logo/receipt URLs. No hardcoded hosts in code.
+    public_base_url: str = ""
+
     # Visible business rule: max |delta| a staff user may adjust in one correction.
     staff_adjustment_limit: int = 10
 

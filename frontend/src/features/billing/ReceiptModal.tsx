@@ -4,6 +4,8 @@ import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { Select } from '@/components/ui/Select'
 import { getStayBill, listStays } from '@/services/rooms'
+import { getSettings } from '@/services/settings'
+import type { BusinessSettings } from '@/services/settings'
 import type { Stay, StayBill } from '@/types/room'
 
 interface ReceiptModalProps {
@@ -26,9 +28,9 @@ function formatDateTime(iso: string | null): string {
   })
 }
 
-function billToText(bill: StayBill): string {
+function billToText(bill: StayBill, businessName: string): string {
   const lines = [
-    `INVENTO RECEIPT`,
+    businessName.toUpperCase(),
     `Room ${bill.stay.room_number} · ${bill.stay.guest_name}`,
     `Checked in: ${formatDateTime(bill.stay.checked_in_at)}`,
     `------------------------------`,
@@ -53,6 +55,8 @@ export function ReceiptModal({ open, onClose, businessUnitId }: ReceiptModalProp
   const [bill, setBill] = useState<StayBill | null>(null)
   const [billLoading, setBillLoading] = useState(false)
   const [shareNote, setShareNote] = useState<string | null>(null)
+  const [branding, setBranding] = useState<BusinessSettings | null>(null)
+  const [logoOk, setLogoOk] = useState(true)
 
   useEffect(() => {
     if (!open) return
@@ -61,10 +65,18 @@ export function ReceiptModal({ open, onClose, businessUnitId }: ReceiptModalProp
     setSelectedStayId('')
     setShareNote(null)
     setLoading(true)
+    setLogoOk(true)
     listStays({ business_unit_id: businessUnitId, status: 'open' })
       .then((res) => setStays(res.stays ?? []))
       .catch((err) => setError(err instanceof Error ? err.message : 'Could not load guests.'))
       .finally(() => setLoading(false))
+    // Branding is decorative: a failure here must never block the bill.
+    getSettings()
+      .then((s) => {
+        setBranding(s)
+        setLogoOk(true)
+      })
+      .catch(() => undefined)
   }, [open, businessUnitId])
 
   useEffect(() => {
@@ -92,7 +104,7 @@ export function ReceiptModal({ open, onClose, businessUnitId }: ReceiptModalProp
 
   async function handleShare() {
     if (!bill) return
-    const text = billToText(bill)
+    const text = billToText(bill, branding?.business_name ?? 'Receipt')
     setShareNote(null)
     try {
       if (typeof navigator !== 'undefined' && 'share' in navigator) {
@@ -153,8 +165,25 @@ export function ReceiptModal({ open, onClose, businessUnitId }: ReceiptModalProp
         {bill && (
           <div id="receipt-print" className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
             <div className="border-b border-slate-200 px-4 py-3">
-              <p className="text-base font-bold text-slate-900">Room {bill.stay.room_number} · {bill.stay.guest_name}</p>
-              <p className="mt-0.5 text-xs font-medium text-slate-500">
+              <div className="flex items-center gap-3">
+                {branding?.has_logo && branding.logo_url && logoOk ? (
+                  <img
+                    src={branding.logo_url}
+                    alt=""
+                    className="h-10 w-10 shrink-0 rounded-lg object-contain"
+                    onError={() => setLogoOk(false)}
+                  />
+                ) : null}
+                <div className="min-w-0">
+                  <p className="truncate text-base font-bold text-slate-900">
+                    {branding?.business_name ?? 'Receipt'}
+                  </p>
+                  <p className="text-xs font-medium text-slate-500">
+                    Room {bill.stay.room_number} · {bill.stay.guest_name}
+                  </p>
+                </div>
+              </div>
+              <p className="mt-1 text-xs font-medium text-slate-500">
                 Checked in {formatDateTime(bill.stay.checked_in_at)}
               </p>
             </div>

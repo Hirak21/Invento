@@ -2,10 +2,12 @@ import { useState } from 'react'
 
 import { cn } from '@/utils/cn'
 import { BusinessUnitsPanel } from '@/features/settings/BusinessUnitsPanel'
+import { BusinessPanel } from '@/features/settings/BusinessPanel'
 import { CategoriesPanel } from '@/features/settings/CategoriesPanel'
 import { SuppliersPanel } from '@/features/settings/SuppliersPanel'
 
 const TABS = [
+  { id: 'business', label: 'Business' },
   { id: 'units', label: 'Business Units' },
   { id: 'categories', label: 'Categories' },
   { id: 'suppliers', label: 'Suppliers' },
@@ -14,7 +16,7 @@ const TABS = [
 type TabId = (typeof TABS)[number]['id']
 
 export function SettingsPage() {
-  const [tab, setTab] = useState<TabId>('units')
+  const [tab, setTab] = useState<TabId>('business')
 
   return (
     <div className="space-y-6">
@@ -42,6 +44,7 @@ export function SettingsPage() {
       </div>
 
       <section className="rounded-lg border border-slate-200 bg-white p-5">
+        {tab === 'business' && <BusinessPanel />}
         {tab === 'units' && <BusinessUnitsPanel />}
         {tab === 'categories' && <CategoriesPanel />}
         {tab === 'suppliers' && <SuppliersPanel />}

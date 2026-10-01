@@ -10,6 +10,7 @@ import { listItems } from '@/services/masterData'
 import { listMenuItems } from '@/services/menu'
 import { createSale } from '@/services/sales'
 import { listRooms, listStays } from '@/services/rooms'
+import { defaultMenuTab } from '@/types/master'
 import type { Room, Stay } from '@/types/room'
 import type { InventoryItem } from '@/types/inventory'
 import type { BusinessUnit } from '@/types/master'
@@ -86,7 +87,8 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
 
   useEffect(() => {
     if (!open) return
-    setBusinessUnitId(selectedBuId ?? businessUnits[0]?.id ?? '')
+    const buId = selectedBuId ?? businessUnits[0]?.id ?? ''
+    setBusinessUnitId(buId)
     setCart([])
     setSearch('')
     setDiscount('')
@@ -95,19 +97,16 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
     setSaleDate(todayISO())
     setError(null)
     setIdempotencyKey(crypto.randomUUID())
-    setSelectedMenuTab('items')
+    // Default tab follows the unit type (restaurant -> Menu, else Items).
+    setSelectedMenuTab(defaultMenuTab(businessUnits.find((u) => u.id === buId)))
     setSelectedMenuItem(null)
     setMenuItems([])
     // Desktop only: mobile must not pop the keyboard on modal open.
     if (!shouldAutoFocusForModal()) return
     setTimeout(() => {
-      if (selectedMenuTab === 'items') {
-        searchRef.current?.focus()
-      } else {
-        menuSearchRef.current?.focus()
-      }
+      searchRef.current?.focus()
     }, 50)
-  }, [open, selectedBuId, businessUnits, selectedMenuTab])
+  }, [open, selectedBuId, businessUnits])
 
   const runSearch = useCallback((text: string) => {
     if (!businessUnitId) return
@@ -137,9 +136,11 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
   }, [open, businessUnitId, selectedMenuTab])
 
   useEffect(() => {
-    if (!open || !businessUnitId || paymentMethod !== 'room_charge') return
+    if (!open || paymentMethod !== 'room_charge') return
     let cancelled = false
-    Promise.all([listRooms({ business_unit_id: businessUnitId, status: 'occupied' }), listStays({ business_unit_id: businessUnitId, status: 'open' })])
+    // Rooms/stays are property-level: offer every open stay regardless of
+    // the sale's unit (the backend records the sale under the selling unit).
+    Promise.all([listRooms({ status: 'occupied' }), listStays({ status: 'open' })])
       .then(([roomsRes, staysRes]) => {
         if (cancelled) return
         setRooms(roomsRes.rooms)
@@ -151,7 +152,7 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
     return () => {
       cancelled = true
     }
-  }, [open, businessUnitId, paymentMethod])
+  }, [open, paymentMethod])
 
   function addItemToCart(item: InventoryItem) {
     setError(null)

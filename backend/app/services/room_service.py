@@ -12,7 +12,11 @@ from app.utils.money import money_to_str, parse_money
 
 
 async def create_room(db: AsyncIOMotorDatabase, payload: RoomCreate) -> dict[str, Any]:
-    """Create a room number under a business unit. Duplicate numbers rejected."""
+    """Create a room number. Rooms are property-level: the number must be
+    unique across the property (not just the creating unit) so a room reads
+    the same from the Restaurant and the Shop. ``business_unit_id`` is kept
+    as the creating unit for backwards compatibility (existing records
+    untouched) but is not used to scope reads."""
     if not is_oid(payload.business_unit_id):
         raise BusinessRuleError("Business unit not found.")
     unit = await db.business_units.find_one({"_id": oid(payload.business_unit_id)})
@@ -22,6 +26,10 @@ async def create_room(db: AsyncIOMotorDatabase, payload: RoomCreate) -> dict[str
     number = payload.room_number.strip()
     if not number:
         raise BusinessRuleError("Room number cannot be empty.")
+
+    existing = await db.rooms.find_one({"room_number": number, "active": True})
+    if existing:
+        raise ConflictError(f"Room '{number}' already exists in this property.")
 
     doc = {
         "business_unit_id": payload.business_unit_id,
@@ -33,7 +41,7 @@ async def create_room(db: AsyncIOMotorDatabase, payload: RoomCreate) -> dict[str
     try:
         result = await db.rooms.insert_one(doc)
     except DuplicateKeyError:
-        raise ConflictError(f"Room '{number}' already exists in this business unit.") from None
+        raise ConflictError(f"Room '{number}' already exists in this property.") from None
     doc["_id"] = result.inserted_id
     return doc
 
@@ -45,6 +53,10 @@ async def list_rooms(
     status: RoomStatus | None = None,
     active: bool | None = True,
 ) -> list[dict[str, Any]]:
+    """Rooms are property-level: omitting ``business_unit_id`` returns every
+    room (the order modals use this so a Restaurant sale can charge a room
+    created under any unit). Passing a unit still filters — kept for the
+    Rooms page unit filter and backwards compatibility."""
     query: dict[str, Any] = {}
     if business_unit_id:
         if not is_oid(business_unit_id):
@@ -79,13 +91,13 @@ async def update_room(
         if number != room["room_number"]:
             dup = await db.rooms.find_one(
                 {
-                    "business_unit_id": room["business_unit_id"],
                     "room_number": number,
+                    "active": True,
                     "_id": {"$ne": room["_id"]},
                 }
             )
             if dup:
-                raise ConflictError(f"Room '{number}' already exists in this business unit.")
+                raise ConflictError(f"Room '{number}' already exists in this property.")
             updates["room_number"] = number
     if active is not None:
         if active is False and room.get("status") == RoomStatus.OCCUPIED.value:

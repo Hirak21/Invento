@@ -1,11 +1,12 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Body, Query
 
 from app.models.room import (
     RoomCreate,
     RoomListResponse,
     RoomOut,
+    RoomUpdate,
     StayCheckIn,
     StayListResponse,
     StayOut,
@@ -62,12 +63,17 @@ async def update_room_endpoint(
     room_id: str,
     db: DBDep,
     user: OwnerUser,
+    payload: RoomUpdate | None = Body(default=None),
     room_number: str | None = None,
     active: bool | None = None,
 ) -> RoomOut:
+    """Rename / (de)activate a room. Prefers the JSON body; the legacy query
+    params are still honored so older clients keep working."""
     from app.models.room import room_out_from_doc as out_from_doc
 
-    updated = await update_room(db, room_id, room_number=room_number, active=active)
+    number = payload.room_number if payload and payload.room_number is not None else room_number
+    is_active = payload.active if payload and payload.active is not None else active
+    updated = await update_room(db, room_id, room_number=number, active=is_active)
     await log_audit(
         db,
         actor_id=str(user["_id"]),

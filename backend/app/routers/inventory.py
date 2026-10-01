@@ -27,7 +27,7 @@ async def list_items(
     category_id: str | None = None,
     supplier_id: str | None = None,
     search: str | None = None,
-    status: str | None = Query(default=None, pattern="^(out|low|healthy)$"),
+    status: str | None = Query(default=None, pattern=r"^(out|low|healthy)$"),
     include_inactive: bool = False,
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
@@ -165,3 +165,21 @@ async def list_item_movements(
         async for doc in cursor
     ]
     return MovementListResponse(movements=movements, total=total)
+
+
+@router.get("/items/{item_id}/compatible-units")
+async def compatible_units_for_ingredient(
+    item_id: str, db: DBDep, user: CurrentUser
+) -> dict:
+    """Units a recipe ingredient line may use for this stock item.
+
+    E.g. a kg-based item accepts ["g", "kg"]; a litre item ["litre", "ml"];
+    pieces accept only themselves. The recipe form uses this to offer the
+    unit dropdown, so incompatible units are rejected client-side too.
+    """
+    from app.services.recipe_service import compatible_units_for_item
+
+    return {
+        "item_id": item_id,
+        "compatible_units": await compatible_units_for_item(db, item_id),
+    }

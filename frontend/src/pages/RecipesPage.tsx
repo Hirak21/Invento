@@ -58,10 +58,16 @@ function RecipeDetailModal({
         {recipe.recipe.description && (
           <p className="mb-4 text-sm text-slate-600">{recipe.recipe.description}</p>
         )}
-        <div className="mb-4 flex items-center gap-3 text-sm text-slate-500">
+        <div className="mb-4 flex flex-wrap items-center gap-3 text-sm text-slate-500">
           <span>Created {formatDate(recipe.recipe.created_at)}</span>
           {recipe.recipe.updated_at !== recipe.recipe.created_at && (
             <span>Updated {formatDate(recipe.recipe.updated_at)}</span>
+          )}
+          {recipe.recipe.selling_price && (
+            <span className="font-semibold text-slate-700">Menu ₹{Number(recipe.recipe.selling_price).toFixed(2)}</span>
+          )}
+          {recipe.recipe.estimated_cost && (
+            <span>Cost ₹{Number(recipe.recipe.estimated_cost).toFixed(2)}</span>
           )}
         </div>
         <h3 className="mb-2 text-sm font-semibold text-slate-900">Ingredients ({recipe.ingredients.length})</h3>
@@ -71,7 +77,7 @@ function RecipeDetailModal({
           <ul className="divide-y divide-slate-200">
             {recipe.ingredients.map((ing) => (
               <li key={ing.id} className="py-2 text-sm">
-                <span className="font-medium text-slate-900">{ing.quantity} {ing.unit}</span>
+                <span className="font-medium text-slate-900">{ing.entered_quantity ?? ing.quantity} {ing.entered_unit ?? ing.unit}</span>
                 {' '}
                 <span className="text-slate-700">{ing.item_name}</span>
                 {ing.notes && (

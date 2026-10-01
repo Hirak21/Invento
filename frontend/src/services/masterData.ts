@@ -13,16 +13,20 @@ export function listBusinessUnits(): Promise<BusinessUnit[]> {
   return apiFetch<BusinessUnit[]>('/business-units')
 }
 
-export function createBusinessUnit(name: string, location?: string): Promise<BusinessUnit> {
+export function createBusinessUnit(
+  name: string,
+  location?: string,
+  unit_type?: 'restaurant' | 'retail',
+): Promise<BusinessUnit> {
   return apiFetch<BusinessUnit>('/business-units', {
     method: 'POST',
-    body: { name, location: location || null },
+    body: { name, location: location || null, unit_type: unit_type ?? 'retail' },
   })
 }
 
 export function updateBusinessUnit(
   id: string,
-  patch: { name?: string; location?: string | null; active?: boolean },
+  patch: { name?: string; location?: string | null; active?: boolean; unit_type?: 'restaurant' | 'retail' },
 ): Promise<BusinessUnit> {
   return apiFetch<BusinessUnit>(`/business-units/${id}`, { method: 'PATCH', body: patch })
 }

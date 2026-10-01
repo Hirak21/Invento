@@ -4,6 +4,9 @@ export interface Recipe {
   business_unit_id: string
   description: string | null
   active: boolean
+  selling_price: string | null
+  category_id: string | null
+  estimated_cost: string | null
   created_at: string
   updated_at: string
 }
@@ -13,8 +16,12 @@ export interface RecipeIngredient {
   recipe_id: string
   item_id: string
   item_name: string
+  /** Canonical quantity in the stock item's base unit. */
   quantity: number
   unit: string
+  /** What was entered (for display); equals quantity/unit for legacy lines. */
+  entered_quantity: number
+  entered_unit: string
   notes: string | null
 }
 
@@ -32,7 +39,10 @@ export interface MenuItem {
   business_unit_id: string
   active: boolean
   created_at: string
-  ingredient_summary?: { item_name: string; qty: number; unit: string }[]
+  category: string | null
+  available: boolean | null
+  estimated_cost: string | null
+  ingredient_summary?: { item_name: string; qty: number; unit: string; entered_qty?: number; entered_unit?: string }[]
 }
 
 export interface RecipeFilters {

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -10,18 +11,126 @@ from app.models.recipe import (
     RecipeOut,
     RecipeIngredientIn,
     RecipeIngredientOut,
+    RecipeWithIngredients,
     _recipe_out_from_doc,
     _ingredient_out_from_doc,
+    recipe_cost_from_lines,
 )
 from app.services.ledger import is_oid, oid
 from app.utils.errors import BusinessRuleError, NotFoundError, ConflictError
 from app.models.user import utc_now
+from app.utils.money import parse_money
+from app.utils.units import (
+    IncompatibleUnitError,
+    compatible_units,
+    decimal_to_mongo,
+    quantize_qty,
+    to_base_quantity,
+    to_decimal_number,
+)
 
 
 def _escape_regex(text: str) -> str:
     import re
 
     return re.escape(text)
+
+
+async def _require_unit(db: AsyncIOMotorDatabase, business_unit_id: str) -> dict[str, Any]:
+    if not is_oid(business_unit_id):
+        raise BusinessRuleError("Business unit not found.")
+    unit = await db.business_units.find_one({"_id": oid(business_unit_id)})
+    if unit is None or not unit.get("active", True):
+        raise BusinessRuleError("Business unit not found or inactive.")
+    return unit
+
+
+async def _require_item_in_bu(
+    db: AsyncIOMotorDatabase, item_id: str, business_unit_id: str
+) -> dict[str, Any]:
+    if not is_oid(item_id):
+        raise BusinessRuleError("Item not found.")
+    item = await db.inventory_items.find_one({"_id": oid(item_id)})
+    if item is None:
+        raise NotFoundError("Item not found.")
+    if item.get("active", True) is False:
+        raise BusinessRuleError(f"Item '{item['name']}' is inactive.")
+    if item["business_unit_id"] != business_unit_id:
+        raise BusinessRuleError(
+            f"Item '{item['name']}' does not belong to the same business unit as the recipe."
+        )
+    return item
+
+
+def _validate_ingredient_payload(
+    payload: RecipeIngredientIn, *, index: int | None = None
+) -> tuple[Decimal, str]:
+    """Return (entered_qty quantized, entered_unit or '')."""
+    prefix = f"Ingredient {index + 1}: " if index is not None else ""
+    try:
+        entered_qty = quantize_qty(payload.quantity)
+    except ValueError:
+        raise BusinessRuleError(
+            f"{prefix}Quantity must be a positive number greater than zero."
+        ) from None
+    entered_unit = (payload.unit or "").strip() or ""
+    return entered_qty, entered_unit
+
+
+async def _ingredient_doc(
+    db: AsyncIOMotorDatabase,
+    recipe_id: Any,
+    business_unit_id: str,
+    payload: RecipeIngredientIn,
+    *,
+    index: int | None = None,
+) -> dict[str, Any]:
+    item = await _require_item_in_bu(db, payload.item_id, business_unit_id)
+    entered_qty, entered_unit = _validate_ingredient_payload(payload, index=index)
+    base_unit = item["base_unit"]
+    effective_unit = entered_unit or base_unit
+    try:
+        canonical = to_base_quantity(entered_qty, effective_unit, base_unit)
+    except IncompatibleUnitError as exc:
+        raise BusinessRuleError(str(exc)) from None
+    except ValueError as exc:
+        raise BusinessRuleError(str(exc)) from None
+    return {
+        "recipe_id": recipe_id,
+        "item_id": oid(payload.item_id),
+        "quantity": decimal_to_mongo(canonical),
+        "entered_quantity": decimal_to_mongo(entered_qty),
+        "entered_unit": effective_unit,
+        "notes": payload.notes,
+        "created_at": utc_now(),
+    }
+
+
+async def _recipe_cost(db: AsyncIOMotorDatabase, recipe_oid: Any) -> str:
+    lines: list[dict[str, Any]] = []
+    async for ing in db.recipe_ingredients.find({"recipe_id": recipe_oid}):
+        item = await db.inventory_items.find_one({"_id": ing["item_id"]})
+        if item is None:
+            continue
+        lines.append({
+            "quantity": to_decimal_number(ing["quantity"]),
+            "purchase_price": item.get("purchase_price") or "0.00",
+        })
+    return recipe_cost_from_lines(lines)
+
+
+async def _full_recipe(db: AsyncIOMotorDatabase, recipe: dict[str, Any]) -> RecipeWithIngredients:
+    ingredients: list[RecipeIngredientOut] = []
+    async for ing in db.recipe_ingredients.find({"recipe_id": recipe["_id"]}):
+        item = await db.inventory_items.find_one({"_id": ing["item_id"]})
+        if item is None:
+            continue
+        ingredients.append(_ingredient_out_from_doc(ing, item, str(recipe["_id"])))
+    cost = await _recipe_cost(db, recipe["_id"])
+    return RecipeWithIngredients(
+        recipe=_recipe_out_from_doc(recipe, estimated_cost=cost),
+        ingredients=ingredients,
+    )
 
 
 async def create_recipe(
@@ -31,11 +140,7 @@ async def create_recipe(
     actor_id: str,
     actor_username: str,
 ) -> dict[str, Any]:
-    if not is_oid(payload.business_unit_id):
-        raise BusinessRuleError("Business unit not found.")
-    unit = await db.business_units.find_one({"_id": oid(payload.business_unit_id)})
-    if unit is None or not unit.get("active", True):
-        raise BusinessRuleError("Business unit not found or inactive.")
+    await _require_unit(db, payload.business_unit_id)
 
     # Case-insensitive name uniqueness so "Dosa" and " dosa " collide.
     name_dup = await db.recipes.find_one({
@@ -47,6 +152,26 @@ async def create_recipe(
             f"A recipe named '{payload.name.strip()}' already exists in this business unit."
         )
 
+    if payload.category_id is not None:
+        if not is_oid(payload.category_id):
+            raise BusinessRuleError("Category not found.")
+        category = await db.categories.find_one({"_id": oid(payload.category_id)})
+        if category is None:
+            raise BusinessRuleError("Category not found.")
+
+    if payload.ingredients is not None:
+        seen: set[str] = set()
+        for idx, line in enumerate(payload.ingredients):
+            if not is_oid(line.item_id):
+                raise BusinessRuleError(f"Ingredient {idx + 1}: item not found.")
+            key = str(oid(line.item_id))
+            if key in seen:
+                raise ConflictError(
+                    "Duplicate ingredient lines are not allowed: "
+                    "each stock item may appear only once per recipe."
+                )
+            seen.add(key)
+
     now = utc_now()
     doc = {
         "name": payload.name.strip(),
@@ -54,11 +179,33 @@ async def create_recipe(
         "description": payload.description,
         "active": payload.active,
         "selling_price": payload.selling_price,
+        "category_id": payload.category_id,
         "created_at": now,
         "updated_at": now,
     }
-    result = await db.recipes.insert_one(doc)
-    doc["_id"] = result.inserted_id
+    try:
+        async with await db.client.start_session() as session:
+            async with session.start_transaction():
+                result = await db.recipes.insert_one(doc, session=session)
+                doc["_id"] = result.inserted_id
+                if payload.ingredients:
+                    ing_docs = [
+                        await _ingredient_doc(
+                            db, result.inserted_id, payload.business_unit_id, line, index=idx
+                        )
+                        for idx, line in enumerate(payload.ingredients)
+                    ]
+                    try:
+                        await db.recipe_ingredients.insert_many(ing_docs, session=session)
+                    except DuplicateKeyError:
+                        raise ConflictError(
+                            "Duplicate ingredient lines are not allowed: "
+                            "each stock item may appear only once per recipe."
+                        ) from None
+    except DuplicateKeyError:
+        raise ConflictError(
+            f"A recipe named '{payload.name.strip()}' already exists in this business unit."
+        ) from None
     return doc
 
 
@@ -66,46 +213,19 @@ async def get_recipe(
     db: AsyncIOMotorDatabase,
     recipe_id: str,
 ) -> dict[str, Any]:
+    """Full recipe for API + BOM consumers.
+
+    Returns ``{"recipe": RecipeOut, "ingredients": [RecipeIngredientOut]}``
+    (pydantic models, matching the response schema). Legacy ingredient docs
+    without ``entered_*`` fields read as base-unit quantities — no migration.
+    """
     if not is_oid(recipe_id):
         raise NotFoundError("Recipe not found.")
     recipe = await db.recipes.find_one({"_id": oid(recipe_id)})
     if recipe is None:
         raise NotFoundError("Recipe not found.")
-
-    ingredients: list[dict[str, Any]] = []
-    item_ids: list[str] = []
-    async for ing_doc in db.recipe_ingredients.find({"recipe_id": oid(recipe_id)}):
-        item_ids.append(str(ing_doc["item_id"]))
-        ingredients.append(ing_doc)
-
-    item_lookup: dict[str, dict[str, Any]] = {}
-    if item_ids:
-        for item_doc in await db.inventory_items.find(
-            {"_id": {"$in": [oid(iid) for iid in item_ids]}}
-        ).to_list(length=None):
-            item_lookup[str(item_doc["_id"])] = item_doc
-
-    enriched_ingredients: list[dict[str, Any]] = []
-    for ing in ingredients:
-        item = item_lookup.get(str(ing["item_id"]))
-        if item is None:
-            raise NotFoundError(f"Ingredient item not found.")
-        enriched_ingredients.append({
-            "_id": ing["_id"],
-            "recipe_id": recipe_id,
-            "item_id": ing["item_id"],
-            "item_name": item["name"],
-            "quantity": ing["quantity"],
-            "unit": item["base_unit"],
-            "notes": ing.get("notes"),
-        })
-
-    return {
-        "recipe": _recipe_out_from_doc(recipe),
-        "ingredients": [
-            _ingredient_out_from_doc(ing, recipe_id) for ing in enriched_ingredients
-        ],
-    }
+    full = await _full_recipe(db, recipe)
+    return {"recipe": full.recipe, "ingredients": full.ingredients}
 
 
 async def list_recipes(
@@ -117,7 +237,11 @@ async def list_recipes(
     query: dict[str, Any] = {"active": active}
     if business_unit_id and is_oid(business_unit_id):
         query["business_unit_id"] = business_unit_id
-    return [_recipe_out_from_doc(doc) async for doc in db.recipes.find(query).sort("name", 1)]
+    out: list[dict[str, Any]] = []
+    async for doc in db.recipes.find(query).sort("name", 1):
+        cost = await _recipe_cost(db, doc["_id"])
+        out.append(_recipe_out_from_doc(doc, estimated_cost=cost))
+    return out
 
 
 async def update_recipe(
@@ -133,25 +257,48 @@ async def update_recipe(
 
     updates: dict[str, Any] = {}
     if payload.name is not None:
-        updates["name"] = payload.name.strip()
+        name = payload.name.strip()
+        if not name:
+            raise BusinessRuleError("Recipe name is required.")
+        dup = await db.recipes.find_one({
+            "name": {"$regex": f"^{_escape_regex(name)}$", "$options": "i"},
+            "business_unit_id": recipe["business_unit_id"],
+            "_id": {"$ne": recipe["_id"]},
+        })
+        if dup:
+            raise ConflictError(
+                f"A recipe named '{name}' already exists in this business unit."
+            )
+        updates["name"] = name
     if payload.business_unit_id is not None:
-        if not is_oid(payload.business_unit_id):
-            raise BusinessRuleError("Business unit not found.")
-        unit = await db.business_units.find_one({"_id": oid(payload.business_unit_id)})
-        if unit is None or not unit.get("active", True):
-            raise BusinessRuleError("Business unit not found or inactive.")
+        await _require_unit(db, payload.business_unit_id)
         updates["business_unit_id"] = payload.business_unit_id
     if payload.description is not None:
         updates["description"] = payload.description
     if payload.active is not None:
         updates["active"] = payload.active
+    if payload.selling_price is not None:
+        updates["selling_price"] = payload.selling_price
+    if payload.category_id is not None:
+        if not is_oid(payload.category_id):
+            raise BusinessRuleError("Category not found.")
+        category = await db.categories.find_one({"_id": oid(payload.category_id)})
+        if category is None:
+            raise BusinessRuleError("Category not found.")
+        updates["category_id"] = payload.category_id
 
     if not updates:
         return recipe
 
     updates["updated_at"] = utc_now()
-    await db.recipes.update_one({"_id": recipe["_id"]}, {"$set": updates})
+    try:
+        await db.recipes.update_one({"_id": recipe["_id"]}, {"$set": updates})
+    except DuplicateKeyError:
+        raise ConflictError(
+            "A recipe with that name already exists in this business unit."
+        ) from None
     updated = await db.recipes.find_one({"_id": recipe["_id"]})
+    assert updated is not None
     return updated
 
 
@@ -191,41 +338,33 @@ async def add_ingredient(
     if recipe is None:
         raise NotFoundError("Recipe not found.")
 
-    if not is_oid(payload.item_id):
-        raise BusinessRuleError("Item not found.")
-    item = await db.inventory_items.find_one({"_id": oid(payload.item_id)})
-    if item is None:
-        raise NotFoundError("Item not found.")
-    if item.get("active", True) is False:
-        raise BusinessRuleError(f"Item '{item['name']}' is inactive.")
-    if item["business_unit_id"] != recipe["business_unit_id"]:
-        raise BusinessRuleError(
-            f"Item '{item['name']}' does not belong to the same business unit as the recipe."
-        )
+    if is_oid(payload.item_id):
+        dup = await db.recipe_ingredients.find_one({
+            "recipe_id": oid(recipe_id),
+            "item_id": oid(payload.item_id),
+        })
+        if dup:
+            item = await db.inventory_items.find_one({"_id": oid(payload.item_id)})
+            label = item["name"] if item else "This item"
+            raise ConflictError(
+                f"{label} is already an ingredient of this recipe. "
+                "Edit the existing line instead of adding a duplicate."
+            )
 
-    ing_doc = {
-        "recipe_id": oid(recipe_id),
-        "item_id": oid(payload.item_id),
-        "quantity": payload.quantity,
-        "notes": payload.notes,
-        "created_at": utc_now(),
-    }
+    ing_doc = await _ingredient_doc(db, oid(recipe_id), recipe["business_unit_id"], payload)
     try:
         result = await db.recipe_ingredients.insert_one(ing_doc)
         ing_doc["_id"] = result.inserted_id
     except DuplicateKeyError:
-        raise ConflictError("Duplicate ingredient entry.")
+        raise ConflictError(
+            "Duplicate ingredient lines are not allowed: "
+            "each stock item may appear only once per recipe."
+        ) from None
 
-    enriched = {
-        "_id": result.inserted_id,
-        "recipe_id": recipe_id,
-        "item_id": payload.item_id,
-        "item_name": item["name"],
-        "quantity": payload.quantity,
-        "unit": item["base_unit"],
-        "notes": payload.notes,
-    }
-    return enriched
+    item = await db.inventory_items.find_one({"_id": ing_doc["item_id"]})
+    assert item is not None
+    enriched = _ingredient_out_from_doc(ing_doc, item, recipe_id)
+    return enriched.model_dump()
 
 
 async def remove_ingredient(
@@ -243,3 +382,13 @@ async def remove_ingredient(
     })
     if result.deleted_count == 0:
         raise NotFoundError("Ingredient not found.")
+
+
+async def compatible_units_for_item(db: AsyncIOMotorDatabase, item_id: str) -> list[str]:
+    """Units the client may offer for an ingredient line on this item."""
+    if not is_oid(item_id):
+        raise NotFoundError("Item not found.")
+    item = await db.inventory_items.find_one({"_id": oid(item_id)})
+    if item is None:
+        raise NotFoundError("Item not found.")
+    return compatible_units(item["base_unit"])

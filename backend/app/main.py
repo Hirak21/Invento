@@ -20,6 +20,7 @@ from app.routers import reports as reports_router
 from app.routers import meta as meta_router
 from app.routers import stock_alerts as stock_alerts_router
 from app.routers import rooms as rooms_router
+from app.routers import settings as settings_router
 from app.utils.errors import register_exception_handlers
 
 
@@ -76,6 +77,7 @@ def create_app() -> FastAPI:
     app.include_router(reports_router.router, prefix="/api")
     app.include_router(stock_alerts_router.router, prefix="/api")
     app.include_router(rooms_router.router, prefix="/api")
+    app.include_router(settings_router.router, prefix="/api")
     app.include_router(recipes_router, prefix="/api")
     app.include_router(menu_router, prefix="/api")
     app.include_router(meta_router.router, prefix="/api")

@@ -47,7 +47,10 @@ class ItemOut(BaseModel):
     purchase_price: str
     selling_price: str | None
     min_stock_level: int
-    current_stock: int
+    # Decimal-safe: whole for legacy integer stocks, fractional once recipe
+    # conversions deduct sub-base-unit amounts (e.g. 0.5 kg). Serialized as a
+    # JSON number; clients must not assume integrality.
+    current_stock: float
     supplier_id: str | None
     notes: str | None
     active: bool
@@ -55,7 +58,7 @@ class ItemOut(BaseModel):
     created_at: datetime
 
 
-def compute_status(current_stock: int, min_stock_level: int) -> StockStatus:
+def compute_status(current_stock: float, min_stock_level: int) -> StockStatus:
     if current_stock <= 0:
         return StockStatus.OUT
     if current_stock <= min_stock_level:
@@ -64,6 +67,10 @@ def compute_status(current_stock: int, min_stock_level: int) -> StockStatus:
 
 
 def item_out_from_doc(doc: dict) -> ItemOut:
+    from app.utils.units import to_decimal_number
+
+    current = float(to_decimal_number(doc.get("current_stock", 0) or 0))
+    minimum = doc.get("min_stock_level", 0) or 0
     return ItemOut(
         id=str(doc["_id"]),
         name=doc["name"],
@@ -74,12 +81,12 @@ def item_out_from_doc(doc: dict) -> ItemOut:
         base_unit=Unit(doc["base_unit"]),
         purchase_price=doc["purchase_price"],
         selling_price=doc.get("selling_price"),
-        min_stock_level=doc.get("min_stock_level", 0),
-        current_stock=doc.get("current_stock", 0),
+        min_stock_level=minimum,
+        current_stock=current,
         supplier_id=doc.get("supplier_id"),
         notes=doc.get("notes"),
         active=doc.get("active", True),
-        status=compute_status(doc.get("current_stock", 0), doc.get("min_stock_level", 0)),
+        status=compute_status(current, minimum),
         created_at=doc["created_at"],
     )
 

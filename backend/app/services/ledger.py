@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from bson import ObjectId
@@ -29,7 +30,7 @@ async def record_movement(
     *,
     item_doc: dict[str, Any],
     movement_type: MovementType,
-    quantity: int,
+    quantity: int | Decimal,
     reference_type: str,
     reference_id: str | None = None,
     unit_cost: str | None = None,
@@ -37,12 +38,23 @@ async def record_movement(
     actor_username: str,
     notes: str | None = None,
 ) -> str:
-    """Insert an inventory movement row. Every stock change must go through this."""
+    """Insert an inventory movement row. Every stock change must go through this.
+
+    ``quantity`` is an int for whole-unit flows (purchases, direct sales);
+    fractional canonical quantities (recipe ingredients, e.g. 0.500 kg) arrive
+    as Decimal and are stored as exact decimal strings — readers stringify
+    either form, so both display identically.
+    """
+    stored: int | str = (
+        quantity
+        if isinstance(quantity, int)
+        else str(quantity.quantize(Decimal("0.001")))
+    )
     doc = {
         "item_id": str(item_doc["_id"]),
         "business_unit_id": item_doc["business_unit_id"],
         "movement_type": movement_type.value,
-        "quantity": quantity,
+        "quantity": stored,
         "unit": item_doc["base_unit"],
         "unit_cost": unit_cost,
         "reference_type": reference_type,

@@ -1,5 +1,3 @@
-from typing import Annotated
-
 from bson import ObjectId
 from fastapi import APIRouter, Query
 
@@ -8,9 +6,8 @@ from app.models.recipe import (
     RecipeUpdate,
     RecipeWithIngredients,
     RecipeIngredientIn,
-    RecipeOut,
     RecipeIngredientOut,
-    _recipe_out_from_doc,
+    _ingredient_out_from_doc,
 )
 from app.routers.deps import CurrentUser, DBDep
 from app.routers.deps import OwnerUser as OwnerDep
@@ -52,8 +49,11 @@ async def create_recipe_endpoint(
         after={"name": doc["name"], "business_unit_id": doc["business_unit_id"]},
         business_unit_id=doc["business_unit_id"],
     )
-    ingredients: list[RecipeIngredientOut] = []
-    return RecipeWithIngredients(recipe=_recipe_out_from_doc(doc), ingredients=ingredients)
+    result = await get_recipe(db, str(doc["_id"]))
+    return RecipeWithIngredients(
+        recipe=result["recipe"],
+        ingredients=result["ingredients"],
+    )
 
 
 @router.get("", response_model=list[RecipeWithIngredients])
@@ -65,25 +65,16 @@ async def list_recipes_endpoint(
 ) -> list[RecipeWithIngredients]:
     recipes = await list_recipes(db, business_unit_id=business_unit_id, active=active)
     result: list[RecipeWithIngredients] = []
-    for recipe_doc in recipes:
-        # list_recipes returns RecipeOut models, not raw documents.
-        recipe_oid = ObjectId(recipe_doc.id)
+    for recipe_out in recipes:
+        recipe_oid = ObjectId(recipe_out.id)
         ingredients: list[RecipeIngredientOut] = []
         async for ing in db.recipe_ingredients.find({"recipe_id": recipe_oid}):
             item = await db.inventory_items.find_one({"_id": ing["item_id"]})
             if item is None:
                 continue
-            ingredients.append(RecipeIngredientOut(
-                id=str(ing["_id"]),
-                recipe_id=str(recipe_oid),
-                item_id=str(ing["item_id"]),
-                item_name=item["name"],
-                quantity=ing["quantity"],
-                unit=item["base_unit"],
-                notes=ing.get("notes"),
-            ))
+            ingredients.append(_ingredient_out_from_doc(ing, item, recipe_out.id))
         result.append(RecipeWithIngredients(
-            recipe=recipe_doc,
+            recipe=recipe_out,
             ingredients=ingredients,
         ))
     return result
@@ -120,23 +111,10 @@ async def update_recipe_endpoint(
         after={"name": updated.get("name"), "active": updated.get("active")},
         business_unit_id=updated.get("business_unit_id"),
     )
-    ingredients: list[RecipeIngredientOut] = []
-    async for ing in db.recipe_ingredients.find({"recipe_id": updated["_id"]}):
-        item = await db.inventory_items.find_one({"_id": ing["item_id"]})
-        if item is None:
-            continue
-        ingredients.append(RecipeIngredientOut(
-            id=str(ing["_id"]),
-            recipe_id=recipe_id,
-            item_id=str(ing["item_id"]),
-            item_name=item["name"],
-            quantity=ing["quantity"],
-            unit=item["base_unit"],
-            notes=ing.get("notes"),
-        ))
+    result = await get_recipe(db, recipe_id)
     return RecipeWithIngredients(
-        recipe=_recipe_out_from_doc(updated),
-        ingredients=ingredients,
+        recipe=result["recipe"],
+        ingredients=result["ingredients"],
     )
 
 
@@ -173,33 +151,17 @@ async def add_ingredient_endpoint(
 ) -> RecipeWithIngredients:
     if not ObjectId.is_valid(recipe_id):
         raise NotFoundError("Recipe not found")
-    enriched = await add_ingredient(
+    await add_ingredient(
         db,
         recipe_id,
         payload,
         actor_id=str(user["_id"]),
         actor_username=user["username"],
     )
-    recipe = await db.recipes.find_one({"_id": ObjectId(recipe_id)})
-    if recipe is None:
-        raise NotFoundError("Recipe not found")
-    ingredients: list[RecipeIngredientOut] = []
-    async for ing in db.recipe_ingredients.find({"recipe_id": recipe["_id"]}):
-        item = await db.inventory_items.find_one({"_id": ing["item_id"]})
-        if item is None:
-            continue
-        ingredients.append(RecipeIngredientOut(
-            id=str(ing["_id"]),
-            recipe_id=recipe_id,
-            item_id=str(ing["item_id"]),
-            item_name=item["name"],
-            quantity=ing["quantity"],
-            unit=item["base_unit"],
-            notes=ing.get("notes"),
-        ))
+    result = await get_recipe(db, recipe_id)
     return RecipeWithIngredients(
-        recipe=_recipe_out_from_doc(recipe),
-        ingredients=ingredients,
+        recipe=result["recipe"],
+        ingredients=result["ingredients"],
     )
 
 

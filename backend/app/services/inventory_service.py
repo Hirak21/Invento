@@ -117,6 +117,10 @@ async def update_item(
             if field in ("category_id", "business_unit_id"):
                 if not ObjectId.is_valid(value):
                     raise BusinessRuleError(f"Invalid {field.replace('_', ' ')}.")
+            if field in ("item_type", "base_unit") and hasattr(value, "value"):
+                # Store the plain string value so reads never depend on
+                # enum-vs-str equality quirks.
+                value = value.value
             updates[field] = value
     for field in ("purchase_price", "selling_price"):
         money_value = getattr(payload, field)
@@ -155,12 +159,28 @@ async def update_item(
         if category is None or not category.get("active", True):
             raise BusinessRuleError("Category not found or inactive.")
 
-    # Validate base_unit change
+    # Validate base_unit change. A base-unit edit reinterprets every stored
+    # quantity (100 kg would read as 100 g), so it is only safe on a
+    # zero-stock item with no recipe lines referencing it.
     if "base_unit" in updates:
         new_unit = updates["base_unit"]
         if new_unit != item["base_unit"]:
-            # Optionally warn: changing unit doesn't convert existing stock
-            pass
+            from app.utils.units import to_decimal_number as _to_dec
+
+            if _to_dec(item.get("current_stock", 0) or 0) != 0:
+                raise BusinessRuleError(
+                    "Cannot change the base unit while stock is on hand "
+                    f"({item.get('current_stock', 0)} {item['base_unit']}). "
+                    "Adjust stock to zero first."
+                )
+            ref_count = await db.recipe_ingredients.count_documents(
+                {"item_id": item["_id"]}
+            )
+            if ref_count:
+                raise BusinessRuleError(
+                    "Cannot change the base unit: recipes use this item "
+                    "as an ingredient. Create a new item instead."
+                )
 
     # Check for duplicate item name within the same business unit (case-insensitive)
     target_bu = updates.get("business_unit_id", item["business_unit_id"])

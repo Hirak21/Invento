@@ -5,7 +5,9 @@ from app.db.mongo import get_mongo_client
 async def test_health_ok(client):
     resp = await client.get("/api/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["db"] == "ok"
 
 
 async def test_needs_bootstrap_true_when_no_users(client):

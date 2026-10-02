@@ -51,7 +51,14 @@ export function RestaurantOrderSheet({ open, onClose, onSent, initialStayId }: R
     setNote('')
     setSelectedStayId(initialStayId ?? '')
     setIdempotencyKey(crypto.randomUUID())
-    if (!selectedBuId) return
+    if (!selectedBuId) {
+      // No unit context: nothing to fetch (menu is per-unit). Clear stale
+      // state and stop loading instead of hanging the skeleton forever.
+      setStays([])
+      setMenuItems([])
+      setLoading(false)
+      return
+    }
     let cancelled = false
     setLoading(true)
     // Rooms/stays are property-level: load ALL open stays so a Restaurant

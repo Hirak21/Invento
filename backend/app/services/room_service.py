@@ -20,8 +20,10 @@ async def create_room(db: AsyncIOMotorDatabase, payload: RoomCreate) -> dict[str
     if not is_oid(payload.business_unit_id):
         raise BusinessRuleError("Business unit not found.")
     unit = await db.business_units.find_one({"_id": oid(payload.business_unit_id)})
-    if unit is None or not unit.get("active", True):
-        raise BusinessRuleError("Business unit not found or inactive.")
+    if unit is None:
+        raise NotFoundError("Business unit not found.")
+    if not unit.get("active", True):
+        raise BusinessRuleError("Business unit is inactive.")
 
     number = payload.room_number.strip()
     if not number:

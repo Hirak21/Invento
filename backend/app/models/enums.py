@@ -13,6 +13,8 @@ class Unit(str, Enum):
     KG = "kg"
     G = "g"
     LITRE = "litre"
+    # Short alias for litre (POS/BOM shorthand); normalized by units._normalize.
+    L = "l"
     ML = "ml"
     BOX = "box"
     PACKET = "packet"

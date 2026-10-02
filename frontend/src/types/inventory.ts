@@ -45,6 +45,18 @@ export interface MovementListResponse {
   total: number
 }
 
+export type StockAlertStatus = 'low' | 'out'
+
+export interface StockAlert {
+  item_id: string
+  item_name: string
+  current_stock: number
+  min_stock_level: number
+  base_unit: string
+  suggested_reorder_qty: number
+  status: StockAlertStatus
+}
+
 export const ITEM_TYPE_LABELS: Record<ItemType, string> = {
   shop_product: 'Shop Product',
   raw_material: 'Raw Material',
@@ -52,7 +64,7 @@ export const ITEM_TYPE_LABELS: Record<ItemType, string> = {
   other: 'Other',
 }
 
-export const UNITS = ['pcs', 'kg', 'g', 'litre', 'ml', 'box', 'packet'] as const
+export const UNITS = ['pcs', 'kg', 'g', 'litre', 'l', 'ml', 'box', 'packet'] as const
 
 export function formatMoney(amount: string | null): string {
   if (amount === null) return '—'

@@ -41,11 +41,38 @@ class BusinessRuleError(AppError):
 
 def register_exception_handlers(app) -> None:  # noqa: ANN001 - FastAPI app
     from fastapi import Request
+    from fastapi.exceptions import RequestValidationError
     from fastapi.responses import JSONResponse
+    from starlette.exceptions import HTTPException as StarletteHTTPException
 
     @app.exception_handler(AppError)
     async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        """Flatten Pydantic errors to the same {"detail": str} shape the
+        frontend already renders, instead of the raw [{"loc", "msg"}] list."""
+        parts: list[str] = []
+        for err in exc.errors():
+            loc = err.get("loc", ())
+            # loc starts with ("body", ...) or ("query", ...); drop the source.
+            where = " → ".join(str(p) for p in loc[1:]) if len(loc) > 1 else ""
+            msg = str(err.get("msg", "Invalid value."))
+            parts.append(f"{where}: {msg}" if where else msg)
+        detail = "; ".join(parts) or "Invalid request."
+        return JSONResponse(status_code=422, content={"detail": detail})
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error_handler(
+        request: Request, exc: StarletteHTTPException
+    ) -> JSONResponse:
+        """Genuine framework 404s (unknown routes) stay 404 with JSON detail;
+        nothing else is silenced."""
+        detail = exc.detail if isinstance(exc.detail, str) else "Request failed."
+        return JSONResponse(status_code=exc.status_code, content={"detail": detail})
 
     @app.exception_handler(Exception)
     async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:

@@ -33,12 +33,21 @@ QTY_QUANTUM: Final[Decimal] = Decimal("0.001")
 # family -> {unit: factor-to-base}. Base unit has factor 1.
 _FAMILIES: Final[dict[str, dict[str, Decimal]]] = {
     "mass": {"kg": Decimal("1"), "g": Decimal("0.001")},
-    "volume": {"litre": Decimal("1"), "ml": Decimal("0.001")},
+    "volume": {"litre": Decimal("1"), "l": Decimal("1"), "ml": Decimal("0.001")},
     # Count-type units have no sub-units: only self-compatible.
     "count_pcs": {"pcs": Decimal("1")},
     "count_box": {"box": Decimal("1")},
     "count_packet": {"packet": Decimal("1")},
 }
+
+#: Short aliases accepted on input and normalized to the canonical spelling
+#: (the POS/BOM dropdowns and API accept ``l`` for ``litre``).
+_ALIASES: Final[dict[str, str]] = {"l": "litre"}
+
+
+def _normalize(unit: str) -> str:
+    cleaned = unit.strip() if isinstance(unit, str) else unit
+    return _ALIASES.get(cleaned, cleaned)
 
 _UNIT_TO_FAMILY: Final[dict[str, str]] = {
     unit: family for family, units in _FAMILIES.items() for unit in units
@@ -64,12 +73,12 @@ def quantize_qty(value: Decimal | int | float | str) -> Decimal:
 
 
 def family_of(unit: str) -> str | None:
-    return _UNIT_TO_FAMILY.get(unit)
+    return _UNIT_TO_FAMILY.get(_normalize(unit))
 
 
 def compatible_units(base_unit: str) -> list[str]:
     """Units convertible to *base_unit* (includes the base unit itself)."""
-    family = _UNIT_TO_FAMILY.get(base_unit)
+    family = _UNIT_TO_FAMILY.get(_normalize(base_unit))
     if family is None:
         return [base_unit]
     return sorted(_FAMILIES[family])
@@ -82,8 +91,8 @@ def to_base_quantity(entered_qty: Decimal | int | float | str, entered_unit: str
         IncompatibleUnitError: e.g. ``g`` for a ``litre``-based item.
         ValueError: non-positive / unparsable quantity.
     """
-    entered = entered_unit.strip() if isinstance(entered_unit, str) else entered_unit
-    base = base_unit.strip() if isinstance(base_unit, str) else base_unit
+    entered = _normalize(entered_unit) if isinstance(entered_unit, str) else entered_unit
+    base = _normalize(base_unit) if isinstance(base_unit, str) else base_unit
     fam_entered = _UNIT_TO_FAMILY.get(entered)
     fam_base = _UNIT_TO_FAMILY.get(base)
     if fam_entered is None:

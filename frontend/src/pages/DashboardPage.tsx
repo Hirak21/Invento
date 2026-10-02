@@ -17,7 +17,8 @@ import {
   ClipboardListIcon,
   CubeTransparentIcon,
   PlusIcon,
-  BellAlertIcon,
+  BanknotesIcon,
+  ReceiptIcon,
 } from '@/components/icons'
 
 function greeting(): string {
@@ -221,27 +222,36 @@ export function DashboardPage() {
         )}
       </section>
 
-      {/* QUICK ACTIONS — what can I do immediately */}
+      {/* QUICK ACTIONS — what can I do immediately.
+          Transactional actions grouped together (sale/purchase/expense/order);
+          Receipts / Billing sits full-width at the bottom. 2-column
+          mobile-first grid, every target 44px+ (Button lg = 52px min). */}
       <section aria-labelledby="actions-heading">
         <h2 id="actions-heading" className="mb-2 text-xs font-bold uppercase tracking-widest text-slate-500">
           Quick actions
         </h2>
         <div className="grid grid-cols-2 gap-3">
-          <Button size="lg" fullWidth onClick={() => setSaleModalOpen(true)} leftIcon={<PlusIcon className="h-5 w-5" />}>
-            New sale
+          <Button size="lg" fullWidth onClick={() => setSaleModalOpen(true)} leftIcon={<PlusIcon className="h-5 w-5" />} className="min-w-0">
+            <span className="truncate">New sale</span>
           </Button>
-          <Button size="lg" variant="secondary" fullWidth onClick={() => setOrderSheetOpen(true)} leftIcon={<ClipboardListIcon className="h-5 w-5" />}>
-            Restaurant order
+          <Button size="lg" variant="secondary" fullWidth onClick={() => navigate('/purchases?new=1')} leftIcon={<CartIcon className="h-5 w-5" />} className="min-w-0">
+            <span className="truncate">+ Purchase</span>
+          </Button>
+          <Button size="lg" variant="secondary" fullWidth onClick={() => navigate('/expenses?new=1')} leftIcon={<BanknotesIcon className="h-5 w-5" />} className="min-w-0">
+            <span className="truncate">+ Expense</span>
+          </Button>
+          <Button size="lg" variant="secondary" fullWidth onClick={() => setOrderSheetOpen(true)} leftIcon={<ClipboardListIcon className="h-5 w-5" />} className="min-w-0">
+            <span className="truncate">Restaurant order</span>
           </Button>
           <Button
             size="lg"
             variant="outline"
             fullWidth
             onClick={() => setReceiptOpen(true)}
-            leftIcon={<BellAlertIcon className="h-5 w-5" />}
-            className="col-span-2"
+            leftIcon={<ReceiptIcon className="h-5 w-5" />}
+            className="col-span-2 min-w-0"
           >
-            Receipts / Billing
+            <span className="truncate">Receipts / Billing</span>
           </Button>
         </div>
       </section>

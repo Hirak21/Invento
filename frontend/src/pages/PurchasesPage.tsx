@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
@@ -38,6 +39,7 @@ export function PurchasesPage() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [supplierFilter, setSupplierFilter] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -66,6 +68,16 @@ export function PurchasesPage() {
     void listBusinessUnits().then(setBusinessUnits).catch(() => undefined)
     void listSuppliers().then(setSuppliers).catch(() => undefined)
   }, [])
+
+  // Deep link from Dashboard Quick Actions ("+ Purchase"): open the create
+  // flow immediately, then clear the param so refresh stays on the list.
+  useEffect(() => {
+    if (searchParams.get('new') === '1') {
+      setSuccessNumber(null)
+      setFormOpen(true)
+      setSearchParams({}, { replace: true })
+    }
+  }, [searchParams, setSearchParams])
 
   return (
     <div className="space-y-4">

@@ -65,9 +65,13 @@ Edit  firebase.json  line 7. Replace the placeholder with your real Render URL:
   NEW:  "destination": "https://invento-lite-backend.onrender.com/api/**"
 (use the exact URL from STEP 2.6)
 
-NOTE: the frontend does NOT use this rewrite. We bake the Render base into the
-build via VITE_API_BASE (see STEP 5). The firebase.json SPA rewrite (source "**"
--> /index.html) is what actually matters so deep links like /login work.
+NOTE: the frontend does NOT use a Hosting rewrite for the API. We bake the
+Render base into the build via VITE_API_BASE (see STEP 5). firebase.json
+contains ONLY the SPA rewrite (source "**" -> /index.html) so deep links
+like /login work — the old `/api/** -> https://...` rewrite was removed
+because Firebase Hosting rewrites cannot proxy to an external HTTPS origin
+(requests to /api/* on the Hosting domain 404). The API base is baked, so a
+Render URL change still requires a frontend rebuild + redeploy.
 
 Also update CORS in render.yaml if your Firebase host differs — currently:
   CORS_ORIGINS = "https://invento-lite.web.app,https://invento-lite.firebaseapp.com"

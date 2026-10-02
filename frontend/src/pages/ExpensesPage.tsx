@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { useSearchParams } from 'react-router-dom'
 
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
@@ -47,6 +48,19 @@ export function ExpensesPage() {
   const [payee, setPayee] = useState('')
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [pending, setPending] = useState(false)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const amountRef = useRef<HTMLInputElement>(null)
+  const formCardRef = useRef<HTMLDivElement>(null)
+
+  // Deep link from Dashboard Quick Actions ("+ Expense"): bring the inline
+  // create form into view and focus it, then clear the param.
+  useEffect(() => {
+    if (searchParams.get('new') === '1') {
+      formCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      setTimeout(() => amountRef.current?.focus({ preventScroll: true }), 300)
+      setSearchParams({}, { replace: true })
+    }
+  }, [searchParams, setSearchParams])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -115,6 +129,7 @@ export function ExpensesPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[400px_1fr]">
+        <div ref={formCardRef} className="scroll-mt-4">
         <Card title="Record expense">
           <form onSubmit={handleSubmit} className="space-y-3">
             <Select label="Category" value={category} onChange={(e) => setCategory(e.target.value as ExpenseCategory)}>
@@ -126,6 +141,7 @@ export function ExpensesPage() {
             </Select>
             <Input
               label="Amount (₹)"
+              ref={amountRef}
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
               inputMode="decimal"
@@ -158,6 +174,7 @@ export function ExpensesPage() {
             </Button>
           </form>
         </Card>
+        </div>
 
         <div className="space-y-3">
           {successMsg && (

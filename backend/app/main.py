@@ -84,7 +84,32 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health", tags=["health"])
     async def health() -> dict:
-        return {"status": "ok"}
+        """Liveness + DB reachability for deploy checks and the UI.
+
+        Keeps the historical ``{"status": "ok"}`` shape; adds a ``db`` field
+        so callers can distinguish "API up, DB down" (503) from fully
+        healthy (200). Render's healthCheckPath only needs a 200 here.
+        """
+        from fastapi.responses import JSONResponse
+
+        from app.db.mongo import get_mongo_client
+
+        try:
+            health_client = get_mongo_client()
+            await health_client.admin.command("ping")
+            db = health_client[get_settings().mongo_db]
+            # A cheap read proves the configured database is actually usable.
+            await db.list_collection_names()
+            return {"status": "ok", "db": "ok", "mongo_db": get_settings().mongo_db}
+        except Exception:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "degraded",
+                    "db": "unreachable",
+                    "mongo_db": get_settings().mongo_db,
+                },
+            )
 
     return app
 

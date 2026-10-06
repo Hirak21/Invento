@@ -88,7 +88,8 @@ export function ItemFormModal({
     if (sellingPrice && !MONEY_RE.test(sellingPrice))
       next.sellingPrice = 'Enter a valid amount or leave empty.'
     if (!/^\d+$/.test(minStockLevel)) next.minStockLevel = 'Must be a whole number.'
-    if (!editing && !/^\d+$/.test(openingStock)) next.openingStock = 'Must be a whole number.'
+    // kg/g (and any weighed unit) accept any positive decimal: 0.05, 5.25, 12.375 ...
+    if (!editing && !/^\d+(\.\d+)?$/.test(openingStock.trim())) next.openingStock = 'Must be a positive number (decimals allowed).'
     setErrors(next)
     return Object.keys(next).length === 0
   }
@@ -214,10 +215,13 @@ export function ItemFormModal({
         />
         {!editing && (
           <Input
-            label="Opening stock"
+            label={`Opening stock${baseUnit === 'kg' || baseUnit === 'g' ? ' (decimals allowed)' : ''}`}
             value={openingStock}
             onChange={(e) => setOpeningStock(e.target.value)}
-            inputMode="numeric"
+            type="number"
+            step="any"
+            min="0"
+            inputMode="decimal"
             hint="Recorded as an opening movement in the stock ledger."
             error={errors.openingStock}
           />

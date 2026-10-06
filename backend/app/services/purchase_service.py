@@ -100,9 +100,11 @@ async def create_purchase(
                 pass
         item_docs.append({**line, "doc": item, "item_purchase_price": item.get("purchase_price", "0")})
 
+    from decimal import Decimal as _Decimal
+
     total = sum(
-        (parse_money(line["unit_cost"]) * line["quantity"] for line in merged.values()),
-        start=0,
+        (parse_money(line["unit_cost"]) * _Decimal(str(line["quantity"])) for line in merged.values()),
+        start=_Decimal("0"),
     )
     total_amount = money_to_str(total)
 
@@ -133,7 +135,9 @@ async def create_purchase(
 
                 for line in item_docs:
                     item = line["doc"]
-                    line_total = parse_money(line["unit_cost"]) * line["quantity"]
+                    from decimal import Decimal as _Decimal2
+
+                    line_total = parse_money(line["unit_cost"]) * _Decimal2(str(line["quantity"]))
                     doc["items"].append(
                         {
                             "item_id": str(item["_id"]),
@@ -145,10 +149,12 @@ async def create_purchase(
                             "line_total": money_to_str(line_total),
                         }
                     )
+                    from app.utils.units import decimal_to_mongo as _d2m
+
                     await db.inventory_items.update_one(
                         {"_id": item["_id"]},
                         {
-                            "$inc": {"current_stock": line["quantity"]},
+                            "$inc": {"current_stock": _d2m(_Decimal2(str(line["quantity"])))},
                             "$set": {"updated_at": datetime.now(UTC)},
                         },
                         session=session,

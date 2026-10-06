@@ -15,8 +15,10 @@ class ItemCreate(BaseModel):
     base_unit: Unit
     purchase_price: MoneyAmount
     selling_price: MoneyAmount | None = None
-    min_stock_level: int = Field(default=0, ge=0)
-    opening_stock: int = Field(default=0, ge=0)
+    # Decimal-safe: kg/g (and any weighed unit) accept fractional stock
+    # (0.05, 5.25, 12.375 ...). No integer validator here.
+    min_stock_level: float = Field(default=0, ge=0)
+    opening_stock: float = Field(default=0, ge=0)
     supplier_id: str | None = None
     notes: str | None = Field(default=None, max_length=500)
 
@@ -30,7 +32,7 @@ class ItemUpdate(BaseModel):
     base_unit: Unit | None = None
     purchase_price: MoneyAmount | None = None
     selling_price: MoneyAmount | None = None
-    min_stock_level: int | None = Field(default=None, ge=0)
+    min_stock_level: float | None = Field(default=None, ge=0)
     supplier_id: str | None = None
     notes: str | None = Field(default=None, max_length=500)
     active: bool | None = None
@@ -46,7 +48,7 @@ class ItemOut(BaseModel):
     base_unit: Unit
     purchase_price: str
     selling_price: str | None
-    min_stock_level: int
+    min_stock_level: float
     # Decimal-safe: whole for legacy integer stocks, fractional once recipe
     # conversions deduct sub-base-unit amounts (e.g. 0.5 kg). Serialized as a
     # JSON number; clients must not assume integrality.

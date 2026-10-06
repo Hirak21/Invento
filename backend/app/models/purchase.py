@@ -21,7 +21,8 @@ class PaymentStatus(str, Enum):
 
 class PurchaseLineIn(BaseModel):
     item_id: str
-    quantity: int = Field(gt=0)
+    # Decimal-safe: kg/g accept any positive decimal; no integer restriction.
+    quantity: float = Field(gt=0)
     unit_cost: MoneyAmount
 
 
@@ -41,7 +42,7 @@ class PurchaseCreate(BaseModel):
 class PurchaseLineOut(BaseModel):
     item_id: str
     item_name: str
-    quantity: int
+    quantity: float
     unit: str
     unit_cost: str
     standard_purchase_price: str | None = None

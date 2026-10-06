@@ -18,14 +18,17 @@ class SalePaymentMethod(str, Enum):
 
 class SaleLineIn(BaseModel):
     item_id: str
-    quantity: int = Field(gt=0)
+    # Decimal-safe: kg/g lines accept any positive decimal (0.05, 5.25 ...).
+    # pcs/plate/cup lines are validated per-unit on the client; the API
+    # accepts fractional values and stores them exactly (Decimal128).
+    quantity: float = Field(gt=0)
     unit_price: MoneyAmount
 
 
 class SaleLineOut(BaseModel):
     item_id: str
     item_name: str
-    quantity: int
+    quantity: float
     unit: str
     unit_price: str
     unit_cost: str | None

@@ -108,8 +108,8 @@ export function PurchaseFormModal({
     const validLines = lines.filter((line) => line.item_id)
     if (validLines.length === 0) return setError('Add at least one item line.')
     for (const line of validLines) {
-      if (!/^\d+$/.test(line.quantity) || Number(line.quantity) <= 0)
-        return setError('Quantities must be whole numbers above zero.')
+      if (!/^\d+(\.\d+)?$/.test(line.quantity.trim()) || Number(line.quantity) <= 0)
+        return setError('Quantities must be positive numbers above zero (decimals allowed for kg/g).')
       if (!MONEY_RE.test(line.unit_cost))
         return setError(`Enter a valid unit cost (e.g. 35.00) for every line.`)
     }
@@ -197,7 +197,10 @@ export function PurchaseFormModal({
                     label={index === 0 ? 'Qty' : undefined}
                     value={line.quantity}
                     onChange={(e) => updateLine(index, { quantity: e.target.value })}
-                    inputMode="numeric"
+                    type="number"
+                    step="any"
+                    min="0"
+                    inputMode="decimal"
                   />
                 </div>
                 <div className="w-full sm:w-28">

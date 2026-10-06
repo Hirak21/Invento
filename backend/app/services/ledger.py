@@ -30,7 +30,7 @@ async def record_movement(
     *,
     item_doc: dict[str, Any],
     movement_type: MovementType,
-    quantity: int | Decimal,
+    quantity: int | float | Decimal,
     reference_type: str,
     reference_id: str | None = None,
     unit_cost: str | None = None,
@@ -45,11 +45,11 @@ async def record_movement(
     as Decimal and are stored as exact decimal strings — readers stringify
     either form, so both display identically.
     """
-    stored: int | str = (
-        quantity
-        if isinstance(quantity, int)
-        else str(quantity.quantize(Decimal("0.001")))
-    )
+    if isinstance(quantity, int):
+        stored: int | str = quantity
+    else:
+        dec = quantity if isinstance(quantity, Decimal) else Decimal(str(quantity))
+        stored = str(dec.quantize(Decimal("0.001")))
     doc = {
         "item_id": str(item_doc["_id"]),
         "business_unit_id": item_doc["business_unit_id"],

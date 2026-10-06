@@ -159,9 +159,10 @@ async def create_sale(
             )
 
     # Items that are BOTH sold directly and consumed as ingredients get their
-    # demands combined for the stock guard.
+    # demands combined for the stock guard. Decimal(str(...)) keeps
+    # fractional kg/g quantities exact (Decimal * float would raise).
     total_demand: dict[str, Decimal] = {
-        key: Decimal(entry["quantity"]) for key, entry in sale_demand.items()
+        key: Decimal(str(entry["quantity"])) for key, entry in sale_demand.items()
     }
     for ing_key, qty in ingredient_demand.items():
         total_demand[ing_key] = total_demand.get(ing_key, Decimal("0")) + qty
@@ -169,11 +170,11 @@ async def create_sale(
     subtotal = Decimal("0.00")
     for rid, ref in recipe_refs.items():
         recipe = recipes_by_id[rid]
-        subtotal += parse_money(ref["unit_price"]) * ref["quantity"]
+        subtotal += parse_money(ref["unit_price"]) * Decimal(str(ref["quantity"]))
         # Keep the recipe name for the billable line snapshot.
         ref["_recipe_name"] = recipe["name"]
     for entry in sale_demand.values():
-        subtotal += parse_money(entry["unit_price"]) * entry["quantity"]
+        subtotal += parse_money(entry["unit_price"]) * Decimal(str(entry["quantity"]))
 
     discount = parse_money(payload.discount) if payload.discount else parse_money("0.00")
     if discount > subtotal:
@@ -248,13 +249,14 @@ async def create_sale(
                         raise BusinessRuleError(
                             f"Item '{item['name']}' does not belong to this business unit."
                         )
-                    available = int(item.get("current_stock", 0))
-                    if available < line["quantity"]:
+                    available = to_decimal_number(item.get("current_stock", 0))
+                    need = Decimal(str(line["quantity"]))
+                    if available < need:
                         raise BusinessRuleError(
                             f"Insufficient stock for '{item['name']}': "
                             f"have {available} {item['base_unit']}, need {line['quantity']}."
                         )
-                    line_total = parse_money(line["unit_price"]) * line["quantity"]
+                    line_total = parse_money(line["unit_price"]) * need
                     doc["items"].append(
                         {
                             "item_id": str(item["_id"]),
@@ -273,7 +275,7 @@ async def create_sale(
                 # snapshotted so later menu edits never change past bills.
                 for rid, ref in recipe_refs.items():
                     recipe = recipes_by_id[rid]
-                    line_total = parse_money(ref["unit_price"]) * ref["quantity"]
+                    line_total = parse_money(ref["unit_price"]) * Decimal(str(ref["quantity"]))
                     doc["items"].append(
                         {
                             "item_id": rid,
@@ -333,13 +335,16 @@ async def create_sale(
                 result = await db.sales.insert_one(doc, session=session)
 
                 # 4) Deduct direct sale demand and record one movement per line.
+                # Floating-point safe: round only for display, never storage —
+                # $inc uses exact Decimal128 via decimal_to_mongo.
                 for line in doc["items"]:
                     if line.get("is_recipe"):
                         continue  # ingredients carry the stock effect for recipes
+                    dec = -Decimal(str(line["quantity"])).quantize(Decimal("0.001"))
                     await db.inventory_items.update_one(
                         {"_id": oid(line["item_id"])},
                         {
-                            "$inc": {"current_stock": -line["quantity"]},
+                            "$inc": {"current_stock": decimal_to_mongo(dec)},
                             "$set": {"updated_at": datetime.now(UTC)},
                         },
                         session=session,
@@ -518,7 +523,7 @@ async def update_sale_status(
                         await db.inventory_items.update_one(
                             {"_id": item["_id"]},
                             {
-                                "$inc": {"current_stock": int(line["quantity"])},
+                                "$inc": {"current_stock": decimal_to_mongo(Decimal(str(line["quantity"])))},
                                 "$set": {"updated_at": now},
                             },
                             session=session,
@@ -528,7 +533,7 @@ async def update_sale_status(
                             session,
                             item_doc=item,
                             movement_type=MovementType.ADJUSTMENT_IN,
-                            quantity=int(line["quantity"]),
+                            quantity=Decimal(str(line["quantity"])),
                             reference_type="sale_cancel",
                             reference_id=str(result["_id"]),
                             unit_cost=item.get("purchase_price"),

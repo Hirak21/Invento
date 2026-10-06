@@ -19,6 +19,91 @@ import type { SalePaymentMethod } from '@/types/sale'
 
 type PaymentMethodChoice = SalePaymentMethod | 'room_charge'
 
+/** Sellable price check: excludes undefined / null / empty / 0 prices. */
+function hasPrice(item: { selling_price: string | null }): boolean {
+  const p = item.selling_price
+  if (p === null || p === undefined || p === '') return false
+  const n = Number(p)
+  return Number.isFinite(n) && n > 0
+}
+
+/** Units that accept fractional quantities (weighed/measured). */
+function allowsDecimals(unit: string): boolean {
+  return ['kg', 'g', 'l', 'litre', 'ml'].includes(unit.toLowerCase())
+}
+
+/** Editable qty control: numeric input + +/-. Clearing while typing is
+ * allowed; the value commits on blur (0/empty removes the line). Decimals
+ * accepted where the unit allows them; totals update live via the parent. */
+function CartQtyInput({
+  value,
+  unit,
+  label,
+  onCommit,
+  onStep,
+}: {
+  value: number
+  unit: string
+  label: string
+  onCommit: (qty: number) => void
+  onStep: (delta: number) => void
+}) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const decimal = allowsDecimals(unit)
+  const display = draft ?? String(value)
+  function commit(raw: string | null) {
+    if (raw === null) return
+    const trimmed = raw.trim()
+    if (trimmed === '') {
+      onCommit(0)
+    } else {
+      const n = Number(trimmed)
+      onCommit(n)
+    }
+    setDraft(null)
+  }
+  return (
+    <span className="flex shrink-0 items-center rounded-md border border-slate-300 bg-white">
+      <button
+        type="button"
+        aria-label={`Decrease ${label}`}
+        onClick={() => {
+          setDraft(null)
+          onStep(-1)
+        }}
+        className="px-2 py-0.5 text-slate-600 hover:bg-slate-100"
+      >
+        −
+      </button>
+      <input
+        type="number"
+        aria-label={`${label} quantity`}
+        value={display}
+        min="0"
+        step={decimal ? 'any' : '1'}
+        inputMode={decimal ? 'decimal' : 'numeric'}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={(e) => commit(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+        }}
+        className="w-16 border-x border-slate-200 px-1 py-0.5 text-center tabular-nums outline-none"
+      />
+      <button
+        type="button"
+        aria-label={`Increase ${label}`}
+        onClick={() => {
+          setDraft(null)
+          onStep(1)
+        }}
+        className="px-2 py-0.5 text-slate-600 hover:bg-slate-100"
+      >
+        +
+      </button>
+    </span>
+  )
+}
+
 function todayISO(): string {
   return new Date().toISOString().split('T')[0]
 }
@@ -69,8 +154,6 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
   const [selectedMenuTab, setSelectedMenuTab] = useState<'items' | 'menu'>('items')
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
   const [menuLoading, setMenuLoading] = useState(false)
-  const [selectedMenuItem, setSelectedMenuItem] = useState<MenuItem | null>(null)
-  const [recipeQty, setRecipeQty] = useState('')
   const [discount, setDiscount] = useState('')
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodChoice>('cash')
   const [rooms, setRooms] = useState<Room[]>([])
@@ -82,7 +165,6 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
   const [idempotencyKey, setIdempotencyKey] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
   const menuSearchRef = useRef<HTMLInputElement>(null)
-  const recipeQtyRef = useRef<HTMLInputElement>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -99,7 +181,6 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
     setIdempotencyKey(crypto.randomUUID())
     // Default tab follows the unit type (restaurant -> Menu, else Items).
     setSelectedMenuTab(defaultMenuTab(businessUnits.find((u) => u.id === buId)))
-    setSelectedMenuItem(null)
     setMenuItems([])
     // Desktop only: mobile must not pop the keyboard on modal open.
     if (!shouldAutoFocusForModal()) return
@@ -111,8 +192,10 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
   const runSearch = useCallback((text: string) => {
     if (!businessUnitId) return
     setSearching(true)
-    listItems({ business_unit_id: businessUnitId, search: text || undefined })
-      .then((res) => setResults(res.items))
+    // Backend filters to priced items too; client re-filters for safety
+    // (legacy docs may carry "" / 0 prices).
+    listItems({ business_unit_id: businessUnitId, search: text || undefined, has_selling_price: true })
+      .then((res) => setResults(res.items.filter(hasPrice)))
       .catch(() => undefined)
       .finally(() => setSearching(false))
   }, [businessUnitId])
@@ -130,7 +213,8 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
     if (!open || !businessUnitId || selectedMenuTab !== 'menu') return
     setMenuLoading(true)
     listMenuItems(businessUnitId)
-      .then(setMenuItems)
+      // Menu = recipes only (backend already excludes shop products; re-filter for safety).
+      .then((items) => setMenuItems(items.filter((mi) => mi.type === 'recipe')))
       .catch(() => setMenuItems([]))
       .finally(() => setMenuLoading(false))
   }, [open, businessUnitId, selectedMenuTab])
@@ -155,7 +239,10 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
   }, [open, paymentMethod])
 
   function addItemToCart(item: InventoryItem) {
+    // No focus()/select() here: tapping an item must NOT focus search or
+    // pop the mobile keyboard. Search focuses only on explicit tap.
     setError(null)
+    if (!hasPrice(item)) return
     if (item.current_stock <= 0) {
       setError(`'${item.name}' is out of stock.`)
       return
@@ -173,33 +260,35 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
       }
       return [...current, { kind: 'item', item, quantity: 1 }]
     })
-    searchRef.current?.focus()
-    searchRef.current?.select()
   }
 
   function setItemQuantity(itemId: string, quantity: number) {
+    // Qty below minimum removes the line (e.g. "-" pressed at 1, or 0/empty entered).
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setCart((current) => current.filter((line) => !(line.kind === 'item' && line.item.id === itemId)))
+      return
+    }
     setCart((current) =>
-      current
-        .map((line) => {
-          if (line.kind !== 'item' || line.item.id !== itemId) return line
-          const clamped = Math.min(Math.max(1, quantity), line.item.current_stock)
-          return { ...line, quantity: clamped }
-        })
-        .filter((line) => line.quantity > 0),
+      current.map((line) => {
+        if (line.kind !== 'item' || line.item.id !== itemId) return line
+        const clamped = Math.min(quantity, line.item.current_stock)
+        if (clamped <= 0) return line
+        return { ...line, quantity: clamped }
+      }),
     )
   }
 
-  function addRecipeToCart() {
-    if (!selectedMenuItem) return
-    const qty = Number(recipeQty)
-    if (!qty || qty <= 0) return setError('Enter a valid quantity.')
+  function addMenuItemToCart(mi: MenuItem) {
+    // Tapping a menu item immediately adds it (qty 1, or +1 if present).
+    // No search/qty focus: the mobile keyboard must not pop up.
     setError(null)
-    const existing = cart.find((line) => line.kind === 'recipe' && line.id === selectedMenuItem.id)
+    const id = mi.id
+    const existing = cart.find((line) => line.kind === 'recipe' && line.id === id)
     if (existing) {
       setCart((current) =>
         current.map((line) =>
-          line.kind === 'recipe' && line.id === selectedMenuItem.id
-            ? { ...line, quantity: line.quantity + qty }
+          line.kind === 'recipe' && line.id === id
+            ? { ...line, quantity: line.quantity + 1 }
             : line,
         ),
       )
@@ -208,29 +297,28 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
         ...current,
         {
           kind: 'recipe',
-          id: selectedMenuItem.id,
-          name: selectedMenuItem.name,
-          selling_price: selectedMenuItem.selling_price,
-          unit: selectedMenuItem.ingredient_summary?.[0]?.unit ?? 'pcs',
-          quantity: qty,
-          ingredients: selectedMenuItem.ingredient_summary ?? [],
+          id: mi.id,
+          name: mi.name,
+          selling_price: mi.selling_price,
+          unit: mi.ingredient_summary?.[0]?.unit ?? 'pcs',
+          quantity: 1,
+          ingredients: mi.ingredient_summary ?? [],
         },
       ])
     }
-    setSelectedMenuItem(null)
-    setRecipeQty('')
-    menuSearchRef.current?.focus()
-    menuSearchRef.current?.select()
   }
 
   function setRecipeQuantity(id: string, quantity: number) {
+    // Qty below minimum removes the line; totals update live via `subtotal`.
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setCart((current) => current.filter((line) => !(line.kind === 'recipe' && line.id === id)))
+      return
+    }
     setCart((current) =>
-      current
-        .map((line) => {
-          if (line.kind !== 'recipe' || line.id !== id) return line
-          return { ...line, quantity }
-        })
-        .filter((line) => line.quantity > 0),
+      current.map((line) => {
+        if (line.kind !== 'recipe' || line.id !== id) return line
+        return { ...line, quantity }
+      }),
     )
   }
 
@@ -398,11 +486,7 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
                           <li key={mi.id}>
                             <button
                               type="button"
-                              onClick={() => {
-                                setSelectedMenuItem(mi)
-                                setSearch('')
-                                setTimeout(() => recipeQtyRef.current?.focus(), 50)
-                              }}
+                              onClick={() => addMenuItemToCart(mi)}
                               className="flex w-full items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-left transition-colors hover:border-indigo-300 hover:bg-indigo-50/60"
                             >
                               <span className="min-w-0">
@@ -425,58 +509,7 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
                       )}
                     </ul>
                   )}
-                  {selectedMenuItem && (
-                    <div className="mt-3 rounded-lg border border-indigo-200 bg-indigo-50/50 p-3">
-                      <p className="text-sm font-medium text-slate-900">{selectedMenuItem.name}</p>
-                      {selectedMenuItem.ingredient_summary && selectedMenuItem.type === 'recipe' && (
-                        <ul className="mt-2 space-y-1">
-                          {selectedMenuItem.ingredient_summary.map((ing, idx) => (
-                            <li key={idx} className="text-xs text-slate-600">
-                              {ing.qty} {ing.unit} {ing.item_name}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                      <div className="mt-3 flex items-center gap-2">
-                        <Input
-                          ref={recipeQtyRef}
-                          label=""
-                          type="number"
-                          min="1"
-                          step="1"
-                          value={recipeQty}
-                          onChange={(e) => setRecipeQty(e.target.value)}
-                          placeholder="Qty"
-                          className="w-20"
-                          autoComplete="off"
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault()
-                              addRecipeToCart()
-                            }
-                          }}
-                        />
-                        <Button
-                          type="button"
-                          size="sm"
-                          onClick={addRecipeToCart}
-                          className="shrink-0"
-                        >
-                          Add
-                        </Button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedMenuItem(null)
-                            setRecipeQty('')
-                          }}
-                          className="text-xs text-slate-500 hover:text-slate-700"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  )}
+                  {null}
                 </>
               )}
             </div>
@@ -496,25 +529,13 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
                       return (
                         <li key={line.item.id} className="flex items-center justify-between gap-2 text-sm">
                           <span className="min-w-0 flex-1 truncate text-slate-700">{line.item.name}</span>
-                          <span className="flex shrink-0 items-center rounded-md border border-slate-300 bg-white">
-                            <button
-                              type="button"
-                              aria-label={`Decrease ${line.item.name}`}
-                              onClick={() => setItemQuantity(line.item.id, line.quantity - 1)}
-                              className="px-2 py-0.5 text-slate-600 hover:bg-slate-100"
-                            >
-                              −
-                            </button>
-                            <span className="w-8 text-center tabular-nums">{line.quantity}</span>
-                            <button
-                              type="button"
-                              aria-label={`Increase ${line.item.name}`}
-                              onClick={() => setItemQuantity(line.item.id, line.quantity + 1)}
-                              className="px-2 py-0.5 text-slate-600 hover:bg-slate-100"
-                            >
-                              +
-                            </button>
-                          </span>
+                          <CartQtyInput
+                            value={line.quantity}
+                            unit={line.item.base_unit}
+                            label={line.item.name}
+                            onCommit={(qty) => setItemQuantity(line.item.id, qty)}
+                            onStep={(delta) => setItemQuantity(line.item.id, line.quantity + delta)}
+                          />
                         </li>
                       )
                     }
@@ -526,23 +547,13 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
                             {line.ingredients.length} ingredients × {line.quantity}
                           </span>
                         </span>
-                        <span className="flex shrink-0 items-center rounded-md border border-slate-300 bg-white">
-                          <button
-                            type="button"
-                            onClick={() => setRecipeQuantity(line.id, line.quantity - 1)}
-                            className="px-2 py-0.5 text-slate-600 hover:bg-slate-100"
-                          >
-                            −
-                          </button>
-                          <span className="w-8 text-center tabular-nums">{line.quantity}</span>
-                          <button
-                            type="button"
-                            onClick={() => setRecipeQuantity(line.id, line.quantity + 1)}
-                            className="px-2 py-0.5 text-slate-600 hover:bg-slate-100"
-                          >
-                            +
-                          </button>
-                        </span>
+                        <CartQtyInput
+                          value={line.quantity}
+                          unit={line.unit}
+                          label={line.name}
+                          onCommit={(qty) => setRecipeQuantity(line.id, qty)}
+                          onStep={(delta) => setRecipeQuantity(line.id, line.quantity + delta)}
+                        />
                       </li>
                     )
                   })}

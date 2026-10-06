@@ -11,6 +11,39 @@ from app.utils.errors import BusinessRuleError
 VALID_PERIODS = {"today", "7d", "month", "custom"}
 
 
+def _ist_zone():
+    """Asia/Kolkata tzinfo (falls back to fixed +5:30 when tzdata is missing)."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo("Asia/Kolkata")
+    except Exception:
+        from datetime import timezone
+
+        return timezone(timedelta(hours=5, minutes=30))
+
+
+def resolve_custom_ist_range(date_from: str | None, date_to: str | None) -> tuple[datetime, datetime]:
+    """Half-open [start, end) UTC instants for a custom from–to range in IST.
+
+    The from-date starts at 00:00:00.000 IST and the to-date ends at
+    23:59:59.999 IST (i.e. end-exclusive = next midnight IST). Midnight edge
+    cases belong to the day they start: a sale at exactly 00:00 IST on the
+    to-date+1 is excluded, one at 00:00 IST on from-date is included.
+    """
+    try:
+        from_dt = datetime.strptime(date_from or "", "%Y-%m-%d")
+        to_dt = datetime.strptime(date_to or "", "%Y-%m-%d")
+    except ValueError:
+        raise BusinessRuleError("Provide valid from/to dates for a custom period.") from None
+    if to_dt < from_dt:
+        raise BusinessRuleError("'to' date must be on or after 'from' date.")
+    ist = _ist_zone()
+    start = from_dt.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=ist)
+    end_exclusive = (to_dt + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=ist)
+    return start.astimezone(UTC), end_exclusive.astimezone(UTC)
+
+
 def resolve_period(
     period: str,
     date_from: str | None = None,
@@ -21,10 +54,13 @@ def resolve_period(
 
     Day boundaries are computed in the client's timezone (offset from JS
     `new Date().getTimezoneOffset()`, negated minutes) so "today" means the
-    owner's today — critical for IST (+5:30) users.
+    owner's today — critical for IST (+5:30) users. Custom ranges are always
+    calendar days in IST (Asia/Kolkata): 00:00:00.000 → 23:59:59.999.
     """
     if period not in VALID_PERIODS:
         raise BusinessRuleError("Invalid period.")
+    if period == "custom":
+        return resolve_custom_ist_range(date_from, date_to)
     shift = timedelta(minutes=tz_offset_minutes)
     local_now = datetime.now(UTC) + shift
     day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -34,19 +70,10 @@ def resolve_period(
     elif period == "7d":
         start_local = day_start - timedelta(days=6)
         end_local = day_start + timedelta(days=1)
-    elif period == "month":
+    else:  # month
         start_local = day_start.replace(day=1)
         next_month = (start_local + timedelta(days=32)).replace(day=1)
         end_local = next_month
-    else:  # custom
-        try:
-            start_local = datetime.strptime(date_from or "", "%Y-%m-%d")
-            end_exclusive = datetime.strptime(date_to or "", "%Y-%m-%d") + timedelta(days=1)
-        except ValueError:
-            raise BusinessRuleError("Provide valid from/to dates for a custom period.") from None
-        if end_exclusive <= start_local:
-            raise BusinessRuleError("'to' date must be on or after 'from' date.")
-        return start_local - shift, end_exclusive - shift
 
     return start_local - shift, end_local - shift
 

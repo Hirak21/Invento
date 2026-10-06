@@ -1,10 +1,38 @@
+from typing import Any
+
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from app.routers.deps import CurrentUser, DBDep
-from app.services.report_service import build_report_workbook
+from app.services.report_service import build_report_workbook, build_sales_summary
 
 router = APIRouter(prefix="/reports", tags=["reports"])
+
+
+@router.get("/summary")
+async def sales_summary(
+    db: DBDep,
+    user: CurrentUser,
+    period: str = Query(default="month", pattern="^(today|7d|month|custom)$"),
+    date_from: str | None = Query(default=None, alias="from", pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    date_to: str | None = Query(default=None, alias="to", pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    business_unit_id: str | None = None,
+    tz_offset_minutes: int = 0,
+) -> dict[str, Any]:
+    """JSON sales totals + per-item breakdown for any range.
+
+    Custom ranges are IST calendar days (00:00:00.000 → 23:59:59.999
+    Asia/Kolkata). Top totals equal the sum of the rows; empty ranges
+    return zeros.
+    """
+    return await build_sales_summary(
+        db,
+        period=period,
+        date_from=date_from,
+        date_to=date_to,
+        business_unit_id=business_unit_id,
+        tz_offset_minutes=tz_offset_minutes,
+    )
 
 
 @router.get("/export")

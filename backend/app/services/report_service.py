@@ -266,3 +266,109 @@ async def build_report_workbook(
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+async def build_sales_summary(
+    db: AsyncIOMotorDatabase,
+    *,
+    period: str,
+    date_from: str | None,
+    date_to: str | None,
+    business_unit_id: str | None,
+    tz_offset_minutes: int = 0,
+) -> dict[str, Any]:
+    """Sales totals + per-item breakdown for any range, via one aggregation.
+
+    Gross = SUM(subtotal), discounts = SUM(discount), net = SUM(total_amount)
+    (net == gross - discounts; the model has no tax field, so tax is "0.00").
+    Cancelled orders are excluded (their stock is restored). The per-item rows
+    sum back to the top totals (revenue == gross, qty == total qty). Empty
+    ranges return zeros, never NaN/None.
+    """
+    from app.services.dashboard_service import resolve_period as _resolve
+
+    range_start, range_end = _resolve(period, date_from, date_to, tz_offset_minutes)
+    match: dict[str, Any] = {
+        "sold_at": {"$gte": range_start, "$lt": range_end},
+        "status": "completed",
+        "order_status": {"$ne": "CANCELLED"},
+    }
+    if business_unit_id:
+        match["business_unit_id"] = business_unit_id
+
+    pipeline: list[dict[str, Any]] = [
+        {"$match": match},
+        {"$facet": {
+            "totals": [
+                {"$group": {
+                    "_id": None,
+                    "gross": {"$sum": {"$toDecimal": "$subtotal"}},
+                    "discounts": {"$sum": {"$toDecimal": {"$ifNull": ["$discount", "0"]}}},
+                    "net": {"$sum": {"$toDecimal": "$total_amount"}},
+                    "orders": {"$sum": 1},
+                }},
+            ],
+            "lines": [
+                {"$unwind": "$items"},
+                {"$group": {
+                    "_id": "$items.item_id",
+                    "item_name": {"$first": "$items.item_name"},
+                    "unit": {"$first": "$items.unit"},
+                    "quantity_sold": {"$sum": "$items.quantity"},
+                    "revenue": {"$sum": {"$toDecimal": "$items.line_total"}},
+                    "order_ids": {"$addToSet": "$_id"},
+                }},
+                {"$project": {
+                    "_id": 0,
+                    "item_id": "$_id",
+                    "item_name": 1,
+                    "unit": 1,
+                    "quantity_sold": 1,
+                    "revenue": 1,
+                    "orders": {"$size": "$order_ids"},
+                }},
+                {"$sort": {"revenue": -1}},
+            ],
+        }},
+    ]
+    docs = await db.sales.aggregate(pipeline).to_list(1)
+    facet = docs[0] if docs else {"totals": [], "lines": []}
+
+    def _money(value: Any) -> str:
+        if value is None:
+            return "0.00"
+        if hasattr(value, "to_decimal"):
+            value = value.to_decimal()
+        try:
+            return str(Decimal(value).quantize(Decimal("0.01")))
+        except (InvalidOperation, ValueError, TypeError):
+            return "0.00"
+
+    t = facet["totals"][0] if facet["totals"] else {}
+    items = [
+        {
+            "item_id": row.get("item_id"),
+            "item_name": row.get("item_name", ""),
+            "unit": row.get("unit", ""),
+            "quantity_sold": float(row.get("quantity_sold") or 0),
+            "revenue": _money(row.get("revenue")),
+            "orders": int(row.get("orders") or 0),
+        }
+        for row in facet.get("lines", [])
+    ]
+    total_qty = sum(row["quantity_sold"] for row in items)
+    # Display rounding only: storage keeps exact decimals.
+    total_qty = round(total_qty, 3)
+
+    return {
+        "period": {"from": range_start.isoformat(), "to": range_end.isoformat()},
+        "totals": {
+            "gross": _money(t.get("gross")),
+            "discounts": _money(t.get("discounts")),
+            "tax": "0.00",
+            "net": _money(t.get("net")),
+            "orders": int(t.get("orders") or 0),
+            "quantity": total_qty,
+        },
+        "items": items,
+    }

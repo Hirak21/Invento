@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
-import { apiDownload } from '@/services/api'
+import { apiDownload, apiFetch } from '@/services/api'
 import { cn } from '@/utils/cn'
 
 type Period = 'today' | '7d' | 'month' | 'custom'
@@ -16,6 +16,40 @@ const PERIOD_TABS: { id: Period; label: string }[] = [
   { id: 'custom', label: 'Custom' },
 ]
 
+interface SummaryItem {
+  item_id: string
+  item_name: string
+  unit: string
+  quantity_sold: number
+  revenue: string
+  orders: number
+}
+
+interface Summary {
+  period: { from: string; to: string }
+  totals: {
+    gross: string
+    discounts: string
+    tax: string
+    net: string
+    orders: number
+    quantity: number
+  }
+  items: SummaryItem[]
+}
+
+function tzOffsetMinutes(): number {
+  try {
+    return -new Date().getTimezoneOffset()
+  } catch {
+    return 0
+  }
+}
+
+function money(n: string): string {
+  return `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
 export function ReportsPage() {
   const { selectedBuId } = useBusinessUnit()
   const [period, setPeriod] = useState<Period>('month')
@@ -23,6 +57,38 @@ export function ReportsPage() {
   const [customTo, setCustomTo] = useState('')
   const [downloading, setDownloading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [summary, setSummary] = useState<Summary | null>(null)
+  const [loadingSummary, setLoadingSummary] = useState(false)
+  const [summaryError, setSummaryError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (period === 'custom' && (!customFrom || !customTo)) {
+      setSummary(null)
+      return
+    }
+    let cancelled = false
+    setLoadingSummary(true)
+    setSummaryError(null)
+    const params = new URLSearchParams({ period, tz_offset_minutes: String(tzOffsetMinutes()) })
+    if (selectedBuId) params.set('business_unit_id', selectedBuId)
+    if (period === 'custom') {
+      params.set('from', customFrom)
+      params.set('to', customTo)
+    }
+    apiFetch<Summary>(`/reports/summary?${params.toString()}`)
+      .then((res) => {
+        if (!cancelled) setSummary(res)
+      })
+      .catch((err) => {
+        if (!cancelled) setSummaryError(err instanceof Error ? err.message : 'Could not load the summary.')
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSummary(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [period, customFrom, customTo, selectedBuId])
 
   async function download() {
     setError(null)
@@ -32,7 +98,7 @@ export function ReportsPage() {
     }
     setDownloading(true)
     try {
-      const params = new URLSearchParams({ period })
+      const params = new URLSearchParams({ period, tz_offset_minutes: String(tzOffsetMinutes()) })
       if (selectedBuId) params.set('business_unit_id', selectedBuId)
       if (period === 'custom') {
         params.set('from', customFrom)
@@ -54,6 +120,8 @@ export function ReportsPage() {
       setDownloading(false)
     }
   }
+
+  const totals = summary?.totals
 
   return (
     <div className="space-y-4">
@@ -94,7 +162,74 @@ export function ReportsPage() {
             {selectedBuId
               ? 'The report covers the business unit selected in the top bar.'
               : 'No unit selected — the report covers all business units.'}
+            {period === 'custom' && customFrom && customTo
+              ? ` Custom range is ${customFrom} 00:00 → ${customTo} 23:59 IST.`
+              : ''}
           </p>
+
+          {summaryError && (
+            <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+              {summaryError}
+            </p>
+          )}
+
+          {loadingSummary ? (
+            <p className="py-4 text-center text-sm text-slate-500">Loading summary…</p>
+          ) : totals ? (
+            <div className="space-y-4">
+              <dl className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                {[
+                  ['Gross sales', money(totals.gross)],
+                  ['Discounts', money(totals.discounts)],
+                  ['Net sale', money(totals.net)],
+                  ['Orders', String(totals.orders)],
+                  ['Qty sold', String(totals.quantity)],
+                  ['Tax', money(totals.tax)],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-lg bg-slate-50 px-3 py-2">
+                    <dt className="text-xs font-medium text-slate-500">{label}</dt>
+                    <dd className="text-base font-bold tabular-nums text-slate-900">{value}</dd>
+                  </div>
+                ))}
+              </dl>
+
+              {summary && summary.items.length > 0 ? (
+                <div className="overflow-x-auto rounded-lg border border-slate-200">
+                  <table className="w-full min-w-[480px] text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-400">
+                        <th className="px-3 py-2 font-medium">Item / recipe</th>
+                        <th className="px-3 py-2 text-right font-medium">Qty</th>
+                        <th className="px-3 py-2 text-right font-medium">Revenue</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {summary.items.map((row) => (
+                        <tr key={row.item_id}>
+                          <td className="px-3 py-2 text-slate-700">
+                            {row.item_name}
+                            <span className="ml-1 text-xs text-slate-400">
+                              {row.orders} order{row.orders === 1 ? '' : 's'}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                            {row.quantity_sold} {row.unit}
+                          </td>
+                          <td className="px-3 py-2 text-right font-semibold tabular-nums text-slate-900">
+                            {money(row.revenue)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                  No sales found for this period.
+                </p>
+              )}
+            </div>
+          ) : null}
 
           {error && (
             <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">

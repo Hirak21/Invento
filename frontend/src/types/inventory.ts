@@ -64,7 +64,7 @@ export const ITEM_TYPE_LABELS: Record<ItemType, string> = {
   other: 'Other',
 }
 
-export const UNITS = ['pcs', 'kg', 'g', 'litre', 'l', 'ml', 'box', 'packet'] as const
+export const UNITS = ['pcs', 'kg', 'g', 'litre', 'l', 'ml', 'box', 'packet', 'plate', 'cup'] as const
 
 export function formatMoney(amount: string | null): string {
   if (amount === null) return '—'

@@ -18,6 +18,8 @@ class Unit(str, Enum):
     ML = "ml"
     BOX = "box"
     PACKET = "packet"
+    PLATE = "plate"
+    CUP = "cup"
 
 
 class MovementType(str, Enum):

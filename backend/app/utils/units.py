@@ -38,6 +38,8 @@ _FAMILIES: Final[dict[str, dict[str, Decimal]]] = {
     "count_pcs": {"pcs": Decimal("1")},
     "count_box": {"box": Decimal("1")},
     "count_packet": {"packet": Decimal("1")},
+    "count_plate": {"plate": Decimal("1")},
+    "count_cup": {"cup": Decimal("1")},
 }
 
 #: Short aliases accepted on input and normalized to the canonical spelling

@@ -27,9 +27,10 @@ async def list_menu_items(
     """Active, saved, sellable menu items for a unit.
 
     Sellable = active recipe with a selling price AND at least one resolvable
-    ingredient (recipes with zero ingredients arenever sellable and are
-    excluded). Shop products need a selling price. Availability is computed
-    live from current stock (one portion).
+    ingredient (recipes with zero ingredients are never sellable and are
+    excluded). Menu = recipes only; shop products / raw ingredients are
+    excluded here by design. Availability is computed live from current
+    stock (one portion).
     """
     items: list[dict[str, Any]] = []
 
@@ -88,29 +89,8 @@ async def list_menu_items(
             "base_unit": None,
         })
 
-    # (b) Shop products (inventory items) with selling_price set
-    item_cursor = db.inventory_items.find({
-        "business_unit_id": business_unit_id,
-        "active": True,
-        "selling_price": {"$ne": None},
-    }).sort("name", 1)
-
-    async for item in item_cursor:
-        stock = to_decimal_number(item.get("current_stock", 0))
-        items.append({
-            "id": str(item["_id"]),
-            "name": item["name"],
-            "type": MenuItemType.SHOP_PRODUCT.value,
-            "recipe_id": None,
-            "selling_price": item.get("selling_price", "0.00"),
-            "business_unit_id": item["business_unit_id"],
-            "active": item.get("active", True),
-            "created_at": item["created_at"],
-            "category": await _category_name(db, item.get("category_id")),
-            "available": stock > 0,
-            "estimated_cost": None,
-            "ingredient_summary": None,
-            "base_unit": item["base_unit"],
-        })
-
+    # (b) Removed: Sell/Menu shows ONLY recipes (dishes). Raw inventory
+    # ingredients and shop products must not appear here (task 1). They
+    # remain sellable via the Items tab / direct item lines, and still exist
+    # in the database — only excluded from menu display.
     return items

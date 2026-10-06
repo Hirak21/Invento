@@ -80,6 +80,7 @@ export interface ItemFilters {
   search?: string
   status?: string
   include_inactive?: boolean
+  has_selling_price?: boolean
 }
 
 export function listItems(filters: ItemFilters = {}): Promise<ItemListResponse> {
@@ -90,6 +91,7 @@ export function listItems(filters: ItemFilters = {}): Promise<ItemListResponse> 
   if (filters.search) params.set('search', filters.search)
   if (filters.status) params.set('status', filters.status)
   if (filters.include_inactive) params.set('include_inactive', 'true')
+  if (filters.has_selling_price) params.set('has_selling_price', 'true')
   const qs = params.toString()
   return apiFetch<ItemListResponse>(`/inventory/items${qs ? `?${qs}` : ''}`)
 }

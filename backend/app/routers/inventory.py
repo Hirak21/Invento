@@ -29,6 +29,7 @@ async def list_items(
     search: str | None = None,
     status: str | None = Query(default=None, pattern=r"^(out|low|healthy)$"),
     include_inactive: bool = False,
+    has_selling_price: bool = False,
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> ItemListResponse:
@@ -39,6 +40,7 @@ async def list_items(
         search=search,
         status=status,
         active=None if include_inactive else True,
+        has_selling_price=has_selling_price or None,
     )
     total = await db.inventory_items.count_documents(query)
     cursor = (

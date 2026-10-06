@@ -233,6 +233,19 @@ async def delete_item(
     return item
 
 
+def _priced_filter() -> dict[str, Any]:
+    """Items with a usable selling price: not null/missing/empty and > 0.
+
+    Prices are stored as normalized "0.00"-style strings (see money.py), but
+    legacy docs may hold null, "" or numeric 0 — all excluded here. Records
+    are never deleted; this only excludes them from display queries.
+    """
+    return {
+        "selling_price": {"$nin": [None, "", "0", "0.0", "0.00", 0, 0.0]},
+        "$expr": {"$gt": [{"$toDecimal": {"$ifNull": ["$selling_price", "0"]}}, 0]},
+    }
+
+
 def build_item_query(
     *,
     business_unit_id: str | None = None,
@@ -241,8 +254,14 @@ def build_item_query(
     search: str | None = None,
     status: str | None = None,
     active: bool | None = True,
+    has_selling_price: bool | None = None,
 ) -> dict[str, Any]:
     query: dict[str, Any] = {}
+    exprs: list[dict[str, Any]] = []
+    if has_selling_price:
+        priced = _priced_filter()
+        query["selling_price"] = priced["selling_price"]
+        exprs.append(priced["$expr"])
     if business_unit_id and ObjectId.is_valid(business_unit_id):
         query["business_unit_id"] = business_unit_id
     if category_id and ObjectId.is_valid(category_id):
@@ -257,14 +276,16 @@ def build_item_query(
     if status == "out":
         query["current_stock"] = {"$lte": 0}
     elif status == "low":
-        query["$expr"] = {
+        exprs.append({
             "$and": [
                 {"$gt": ["$current_stock", 0]},
                 {"$lte": ["$current_stock", "$min_stock_level"]},
             ]
-        }
+        })
     elif status == "healthy":
-        query["$expr"] = {"$gt": ["$current_stock", "$min_stock_level"]}
+        exprs.append({"$gt": ["$current_stock", "$min_stock_level"]})
+    if exprs:
+        query["$expr"] = exprs[0] if len(exprs) == 1 else {"$and": exprs}
     if active is not None:
         query["active"] = active
     return query

@@ -115,3 +115,99 @@ ONGOING OPS (quick reference)
   docker compose exec mongo mongosh        # DB shell
   Backup DB: docker compose exec -T mongo mongodump --quiet --archive > backup.archive
   Update backend: copy new backend/ over, docker compose up -d --build backend
+
+====================================================================
+OWNER GUIDE (read this — plain English, no expertise needed)
+====================================================================
+
+--- A. WHERE ARE MY DOCS? (on your own computer) ---
+
+Everything lives in one folder:  /home/hrk/Projects/Invento/
+
+  deploy/VPS_RUNBOOK.md   <- you are here. Setup + this owner guide.
+  deploy/docker-compose.yml  <- what runs on the VPS (mongo + api + caddy)
+  deploy/Caddyfile           <- the HTTPS setup (you never need to touch it)
+  deploy/.env.example        <- template of the server settings (no secrets in it)
+  backend/Dockerfile         <- how the API is packaged
+  DEPLOY_RUNBOOK.md          <- OLD Render setup. Retired, kept for rollback only.
+
+Live server addresses (bookmark these):
+  Shop app (frontend):  https://invento-lite.web.app
+  API (backend):        https://invento-lite.duckdns.org/api/health
+                        (open it — you should see {"status":"ok",...})
+  VPS address:          31.42.125.143
+
+Secrets are NEVER stored in these files. The real passwords/keys live only
+on the VPS itself (/opt/invento/deploy/production.env) and in ~/.ssh/ on
+your computer. That is on purpose — files here can be pushed to GitHub safely.
+
+--- B. LOG IN TO THE VPS YOURSELF ---
+
+From THIS computer, open a terminal and run exactly this:
+
+  ssh -i ~/.ssh/invento_vps root@31.42.125.143
+
+What each part means:
+  ssh                        = "open a secure shell"
+  -i ~/.ssh/invento_vps      = "prove it's me using my key file"
+                               (this file is your identity — never share it)
+  root                       = log in as the admin user
+  31.42.125.143              = the VPS address
+
+Type `exit` (or press Ctrl+D) to log out.
+
+Once inside, the only commands you normally need:
+
+  cd /opt/invento/deploy
+  docker compose ps              # is everything running? (all "healthy"/"Up")
+  docker compose logs -f backend  # watch the API log live (Ctrl+C to stop)
+
+From ANOTHER computer (second laptop):
+  1. Copy the PRIVATE key file ~/.ssh/invento_vps to the new computer
+     (USB pen drive is best — never send keys on WhatsApp/email/chat).
+  2. On the new computer:  chmod 600 ~/.ssh/invento_vps
+  3. Then the same ssh command as above works.
+
+From your PHONE (emergency checks):
+  1. Install Termius (free) from the Play Store.
+  2. Add a Host: address 31.42.125.143, username root,
+     key = contents of ~/.ssh/invento_vps (paste once, it stays in the app).
+  3. You can now run `docker compose ps` from your phone.
+
+If ssh ever says "Permission denied": your key isn't being offered — make
+sure you typed `-i ~/.ssh/invento_vps` and the file still exists.
+
+--- C. ROTATE THE ATLAS DATABASE PASSWORD ---
+
+Background: your shop data was COPIED from Atlas (cloud database) to the VPS
+on 2026-10-07. The VPS now uses only its own database and NEVER talks to
+Atlas again (verified — no Atlas address exists anywhere on the server).
+So changing the Atlas password breaks nothing on the VPS. Do it because the
+old password passed through chat.
+
+Steps (5 minutes, nothing to type on any server):
+  1. Go to https://cloud.mongodb.com and log in (Google login is fine).
+  2. Top-left: make sure project "Invento" (or yours) is selected.
+  3. Left menu: Security -> Database Access.
+  4. Find user `platiodevelopers_db_user` -> click Edit.
+  5. Click "Edit Password" (or autogenerate), set a new strong password,
+     Save / Update User. Done.
+  6. OPTIONAL but recommended: left menu -> Network Access -> check the
+     allow-list. If it says 0.0.0.0/0 (open to the world) and you are done
+     with Atlas, you can Delete the Atlas cluster entirely instead —
+     MENU: Database -> ... -> Terminate. Only do this after the VPS has
+     run fine for a few days.
+
+NOTE: if you keep Render as a standby, its backend still uses the OLD Atlas
+password, so Render would break after rotation. That is expected — update
+Render's MONGO_URI env only if you want Render to keep working; otherwise
+shut the Render service down (dashboard.render.com -> service -> Suspend).
+
+--- D. CHANGE THE VPS ROOT PASSWORD (optional) ---
+
+Password login is DISABLED on the VPS (keys only), so the old root password
+is already useless to attackers. If you still want a fresh one for console
+access via your provider's web panel:
+  1. Log in with the key (section B).
+  2. Run:  passwd
+  3. Type the new password twice. Done. (It still can't be used over SSH.)

@@ -1,0 +1,77 @@
+# Invento Lite — VPS production stack.
+# Services: MongoDB (single-node replica set rs0, required for transactions),
+# backend API, Caddy (reverse proxy + automatic HTTPS).
+#
+# Usage (on the VPS, inside this directory):
+#   1. cp .env.example production.env   # then fill in API_DOMAIN + JWT_SECRET
+#   2. docker compose up -d --build
+#   3. docker compose ps && curl -f https://<API_DOMAIN>/api/health
+#
+# Mongo port 27017 is NOT published: the database is reachable only from
+# inside the compose network. Manage it via `docker compose exec mongo`.
+
+name: invento
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    # Small-VPS tuning: cap WiredTiger cache (default floor is 256MB+ and the
+    # box only has ~1GB). 0.25GB is plenty for this workload.
+    command: ["mongod", "--replSet", "rs0", "--bind_ip", "localhost,mongo", "--wiredTigerCacheSizeGB", "0.25"]
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # One-shot: initiates the single-node replica set (idempotent — skips if done).
+  mongo-init:
+    image: mongo:7
+    depends_on:
+      mongo:
+        condition: service_healthy
+    command: >
+      mongosh --host mongo --quiet --eval
+      "try { rs.initiate({_id:'rs0', members:[{_id:0, host:'mongo:27017'}]}) } catch (e) { if (!/already initialized/i.test(e.message)) throw e }"
+    restart: "no"
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./production.env
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      API_DOMAIN: ${API_DOMAIN}
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  mongo_data:
+  caddy_data:
+  caddy_config:

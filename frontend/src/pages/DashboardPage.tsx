@@ -10,6 +10,7 @@ import { RestaurantOrderSheet } from '@/features/restaurant/RestaurantOrderSheet
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
 import { fetchSummary } from '@/services/dashboard'
 import type { DashboardSummary } from '@/services/dashboard'
+import { ApiError, isNetworkError } from '@/services/api'
 import { listRestaurantOrders } from '@/services/restaurantOrders'
 import type { Sale } from '@/types/sale'
 import {
@@ -57,6 +58,8 @@ export function DashboardPage() {
   const [orders, setOrders] = useState<Sale[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // True while auto-retrying a network blip (e.g. free-tier server waking up).
+  const [waking, setWaking] = useState(false)
   const [saleModalOpen, setSaleModalOpen] = useState(false)
   const [orderSheetOpen, setOrderSheetOpen] = useState(false)
   const [receiptOpen, setReceiptOpen] = useState(false)
@@ -64,26 +67,70 @@ export function DashboardPage() {
   const invalidStoredUnit =
     buStatus === 'ready' && selectedBuId !== null && units.length > 0 && !units.some((u) => u.id === selectedBuId)
 
+  // Single request with timeout + automatic retries on network-level failures
+  // (server asleep/restarting, brief offline). Only network errors (status 0)
+  // are retried — HTTP errors (401/422/500) fail fast with their message.
+  // Calls onRetry the first time we enter a retry wait so the UI can explain
+  // the delay instead of flashing an error.
+  const fetchResilient = useCallback(
+    async <T,>(fn: () => Promise<T>, onRetry: () => void): Promise<T> => {
+      const waits = [2500, 5000]
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          return await fn()
+        } catch (err) {
+          if (!isNetworkError(err) || attempt >= waits.length) throw err
+          onRetry()
+          await new Promise((resolve) => setTimeout(resolve, waits[attempt]))
+        }
+      }
+    },
+    [],
+  )
+
   const load = useCallback(async () => {
     // Don't fetch with a stale ID while units are still validating.
     if (buStatus === 'validating') return
     setLoading(true)
     setError(null)
+    setWaking(false)
     try {
       const buParam = selectedBuId ?? undefined
-      const [summaryData, ordersRes] = await Promise.all([
-        fetchSummary({ period: 'today', business_unit_id: buParam }),
-        listRestaurantOrders({ business_unit_id: buParam, status: 'active' }),
+      const markWaking = () => setWaking(true)
+      // Settled (not all-or-nothing): if one call fails but the other
+      // succeeds, still render what loaded instead of a blank page.
+      const [summaryRes, ordersRes] = await Promise.allSettled([
+        fetchResilient(
+          () => fetchSummary({ period: 'today', business_unit_id: buParam, timeoutMs: 25000 }),
+          markWaking,
+        ),
+        fetchResilient(
+          () => listRestaurantOrders({ business_unit_id: buParam, status: 'active' }, { timeoutMs: 25000 }),
+          markWaking,
+        ),
       ])
-      setSummary(summaryData)
-      setOrders(ordersRes.orders ?? [])
+      if (summaryRes.status === 'fulfilled') setSummary(summaryRes.value)
+      if (ordersRes.status === 'fulfilled') setOrders(ordersRes.value.orders ?? [])
+      const failures = [summaryRes, ordersRes].filter((r) => r.status === 'rejected')
+      if (failures.length > 0) {
+        // Summary is the critical payload; orders-only failures surface as a
+        // banner over still-useful data. Fresh loads with no summary show empty.
+        const first = failures[0] as PromiseRejectedResult
+        throw first.reason
+      }
+      setWaking(false)
     } catch (err) {
       // Keep previous good data on refresh failure; only fresh load shows empty.
-      setError(err instanceof Error ? err.message : 'Could not load today’s status.')
+      setWaking(false)
+      if (err instanceof ApiError && err.status === 0) {
+        setError('The server is waking up or unreachable. Wait a few seconds, then retry.')
+      } else {
+        setError(err instanceof Error ? err.message : 'Could not load today’s status.')
+      }
     } finally {
       setLoading(false)
     }
-  }, [selectedBuId, buStatus])
+  }, [selectedBuId, buStatus, fetchResilient])
 
   useEffect(() => {
     void load()
@@ -137,6 +184,13 @@ export function DashboardPage() {
           <Button variant="outline" size="sm" className="mt-2" onClick={handleRetry}>
             Retry
           </Button>
+        </div>
+      )}
+
+      {waking && !error && (
+        <div role="status" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+          <p className="text-sm font-medium text-slate-700">Waking up the server… retrying automatically.</p>
+          <p className="mt-0.5 text-xs text-slate-500">First visit of the day can take a few seconds.</p>
         </div>
       )}
 

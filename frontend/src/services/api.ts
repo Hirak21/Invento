@@ -11,29 +11,46 @@ export class ApiError extends Error {
   }
 }
 
-interface ApiRequestOptions extends Omit<RequestInit, 'body'> {
+interface ApiRequestOptions extends Omit<RequestInit, 'body' | 'signal'> {
   body?: unknown
+  /** Abort the request after this many ms. Throw is ApiError status 0 (network error). */
+  timeoutMs?: number
+}
+
+/** True when the request never got an HTTP response (server down/sleeping, offline, timeout). */
+export function isNetworkError(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 0
 }
 
 export async function apiFetch<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
   const token = localStorage.getItem(TOKEN_KEY)
-  const headers = new Headers(options.headers)
-  if (options.body !== undefined && !headers.has('Content-Type')) {
+  const { timeoutMs, ...fetchOptions } = options
+  const headers = new Headers(fetchOptions.headers)
+  if (fetchOptions.body !== undefined && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
   if (token) {
     headers.set('Authorization', `Bearer ${token}`)
   }
 
+  const controller = new AbortController()
+  const timer = timeoutMs ? setTimeout(() => controller.abort(), timeoutMs) : null
+
   let response: Response
   try {
     response = await fetch(`${BASE}${path}`, {
-      ...options,
+      ...fetchOptions,
       headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: controller.signal,
+      body: fetchOptions.body === undefined ? undefined : JSON.stringify(fetchOptions.body),
     })
-  } catch {
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new ApiError(0, 'The server is taking too long. It may be waking up — please retry.')
+    }
     throw new ApiError(0, 'Cannot reach the server. Check your connection.')
+  } finally {
+    if (timer) clearTimeout(timer)
   }
 
   if (response.status === 204) {

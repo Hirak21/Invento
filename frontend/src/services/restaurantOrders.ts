@@ -10,6 +10,7 @@ export interface RestaurantOrderFilters {
 /** Active orders for the restaurant board: not SERVED, not CANCELLED. */
 export async function listRestaurantOrders(
   filters: RestaurantOrderFilters = {},
+  opts: { timeoutMs?: number } = {},
 ): Promise<{ orders: Sale[]; total: number }> {
   const search = new URLSearchParams()
   if (filters.business_unit_id) search.set('business_unit_id', filters.business_unit_id)
@@ -17,7 +18,9 @@ export async function listRestaurantOrders(
   if (filters.room) search.set('room', filters.room)
   const qs = search.toString()
   // The sales endpoint returns { sales, total } - map to the board's shape.
-  const res = await apiFetch<{ sales: Sale[]; total: number }>(`/sales?${qs}`)
+  const res = await apiFetch<{ sales: Sale[]; total: number }>(`/sales?${qs}`, {
+    timeoutMs: opts.timeoutMs,
+  })
   return { orders: res.sales ?? [], total: res.total ?? 0 }
 }
 

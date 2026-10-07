@@ -90,6 +90,31 @@ def _decimal128_to_str(value: Any) -> str:
     return str(Decimal(value).quantize(Decimal("0.01")))
 
 
+def _json_num(value: Any, default: float = 0.0) -> Any:
+    """Quantities may be stored as Decimal128 (seeds / legacy writes), strings,
+    or plain int/float. Always return a JSON-safe number so downstream
+    comparisons (e.g. ``current_stock <= 0``) and encoding never blow up."""
+    if value is None or isinstance(value, bool):
+        return default
+    if hasattr(value, "to_decimal"):
+        value = value.to_decimal()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _json_amount(value: Any) -> Any:
+    """Money passthrough that survives Decimal128-stored amounts."""
+    if value is None or hasattr(value, "to_decimal"):
+        return _decimal128_to_str(value)
+    return value
+
+
 async def build_summary(
     db: AsyncIOMotorDatabase,
     *,
@@ -157,8 +182,8 @@ async def build_summary(
         {
             "item_id": str(doc["_id"]),
             "item_name": doc["item_name"],
-            "current_stock": doc["current_stock"],
-            "min_stock_level": doc["min_stock_level"],
+            "current_stock": _json_num(doc["current_stock"]),
+            "min_stock_level": _json_num(doc["min_stock_level"]),
             "base_unit": doc["base_unit"],
         }
         async for doc in low_cursor
@@ -215,13 +240,13 @@ async def build_summary(
     )
     activity: list[dict[str, Any]] = []
     for doc in recent_sales:
-        activity.append({"type": "sale", "number": doc["sale_number"], "label": "Sale", "amount": doc["total_amount"], "at": doc["sold_at"]})
+        activity.append({"type": "sale", "number": doc["sale_number"], "label": "Sale", "amount": _json_amount(doc["total_amount"]), "at": doc["sold_at"]})
     for doc in recent_purchases:
-        activity.append({"type": "purchase", "number": doc["purchase_number"], "label": "Purchase", "amount": doc["total_amount"], "at": doc["purchased_at"]})
+        activity.append({"type": "purchase", "number": doc["purchase_number"], "label": "Purchase", "amount": _json_amount(doc["total_amount"]), "at": doc["purchased_at"]})
     for doc in recent_expenses:
-        activity.append({"type": "expense", "number": doc["expense_number"], "label": doc.get("description") or "Expense", "amount": doc["amount"], "at": doc["spent_at"]})
+        activity.append({"type": "expense", "number": doc["expense_number"], "label": doc.get("description") or "Expense", "amount": _json_amount(doc["amount"]), "at": doc["spent_at"]})
     for doc in recent_wastages:
-        activity.append({"type": "wastage", "number": "", "label": doc.get("item_name") or "Wastage", "amount": doc.get("estimated_value", "0.00"), "at": doc["wasted_at"]})
+        activity.append({"type": "wastage", "number": "", "label": doc.get("item_name") or "Wastage", "amount": _json_amount(doc.get("estimated_value", "0.00")), "at": doc["wasted_at"]})
     activity.sort(key=lambda entry: entry["at"], reverse=True)
     activity = activity[:8]
 
@@ -243,7 +268,7 @@ async def build_summary(
         {
             "item_id": doc["_id"],
             "item_name": doc["item_name"],
-            "quantity_sold": doc["quantity_sold"],
+            "quantity_sold": _json_num(doc["quantity_sold"]),
             "revenue": _decimal128_to_str(doc["revenue"]),
         }
         for doc in top_docs

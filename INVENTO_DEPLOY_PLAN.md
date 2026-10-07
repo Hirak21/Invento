@@ -1,5 +1,8 @@
 # Invento Lite — Deploy Plan (Render backend + Firebase frontend + Atlas M0)
 
+> RETIRED 2026-10-07: production moved to a private VPS.
+> Live doc: `deploy/VPS_RUNBOOK.md`. Kept for history only.
+
 Status: code is committed locally (commit 4e8bf8a). MongoDB Atlas M0 cluster is CREATED.
 Remaining: push to GitHub → connect Render → deploy Firebase → wire Mongo URI.
 

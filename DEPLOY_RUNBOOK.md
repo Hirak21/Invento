@@ -1,5 +1,9 @@
 # Invento Lite — DEPLOY RUNBOOK (Render backend + Firebase frontend + Atlas M0)
 
+> RETIRED 2026-10-07: production moved to a private VPS
+> (backend + MongoDB on Docker, Caddy HTTPS, Firebase still hosts the frontend).
+> Live doc: `deploy/VPS_RUNBOOK.md`. This file is kept for rollback reference only.
+
 Status: code is built + frontend rebuilt clean (2026-08-31). Backend imports fine,
 `/api/health` is correctly registered in `backend/app/main.py` (line 61). The only
 reason it was "not deployed / 404" before was that the deploy wiring was never done —

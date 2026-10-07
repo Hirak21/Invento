@@ -47,6 +47,7 @@ export function fetchSummary(params: {
   from?: string
   to?: string
   business_unit_id?: string
+  timeoutMs?: number
 }): Promise<DashboardSummary> {
   const search = new URLSearchParams({ period: params.period })
   if (params.period === 'custom') {
@@ -56,11 +57,11 @@ export function fetchSummary(params: {
   if (params.business_unit_id) search.set('business_unit_id', params.business_unit_id)
   // JS getTimezoneOffset is minutes *behind* UTC (IST → -330); API wants +330.
   search.set('tz_offset_minutes', String(-new Date().getTimezoneOffset()))
-  return apiFetchDashboard(search)
+  return apiFetchDashboard(search, params.timeoutMs)
 }
 
 import { apiFetch } from './api'
 
-function apiFetchDashboard(search: URLSearchParams): Promise<DashboardSummary> {
-  return apiFetch<DashboardSummary>(`/dashboard/summary?${search.toString()}`)
+function apiFetchDashboard(search: URLSearchParams, timeoutMs?: number): Promise<DashboardSummary> {
+  return apiFetch<DashboardSummary>(`/dashboard/summary?${search.toString()}`, { timeoutMs })
 }

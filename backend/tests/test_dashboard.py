@@ -149,3 +149,41 @@ async def test_bu_filter_scopes_totals(client, owner_headers):
     assert scoped["totals"]["sales"] == "225.00"
     assert scoped["totals"]["purchases"] == "700.00"
     assert scoped["totals"]["expenses"] == "250.00"
+
+
+async def test_summary_survives_decimal128_stored_values(client, owner_headers):
+    """Regression: production seeds store quantities/amounts as Decimal128.
+    The summary must normalize them instead of 500ing on comparison/encoding."""
+    from bson import Decimal128, ObjectId
+
+    # NOTE: use get_db(), not tests.conftest.TEST_DB_NAME — tests/ has no
+    # __init__.py, so `import tests.conftest` re-executes the module and yields
+    # a DIFFERENT random db name than the one the app actually uses.
+    from app.db.mongo import get_db
+
+    bu_id, cat_id = await setup_refs(client, owner_headers)
+    item = await make_item(client, owner_headers, bu_id, cat_id, name="Dec Guy", sku="DEC-1", opening=2)
+    db = get_db()
+    updated = await db.inventory_items.update_one(
+        {"_id": ObjectId(item["id"])},
+        {"$set": {"current_stock": Decimal128("2"), "min_stock_level": Decimal128("5")}},
+    )
+    assert updated.matched_count == 1
+    exp = (
+        await client.post("/api/expenses", headers=owner_headers, json={
+            "business_unit_id": bu_id, "category": "utilities", "amount": "250.00",
+            "payment_method": "cash", "description": "Power", "idempotency_key": "dec-exp-0001"})
+    ).json()
+    await db.expenses.update_one(
+        {"expense_number": exp["expense_number"]},
+        {"$set": {"amount": Decimal128("250.00")}},
+    )
+
+    resp = await client.get("/api/dashboard/summary", headers=owner_headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    status_of = {e["item_id"]: e["status"] for e in body["low_stock"]}
+    assert status_of[item["id"]] == "low"
+    expense_amounts = [e["amount"] for e in body["recent_activity"] if e["type"] == "expense"]
+    assert "250.00" in expense_amounts

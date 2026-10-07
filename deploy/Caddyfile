@@ -1,0 +1,7 @@
+# Caddy reverse proxy. ${API_DOMAIN} comes from the environment (see
+# docker-compose.yml). When the site address is a domain name, Caddy
+# automatically obtains + renews a Let's Encrypt certificate — no certbot
+# needed. Requires the domain's A-record to already point at this VPS.
+{$API_DOMAIN} {
+	reverse_proxy backend:8000
+}

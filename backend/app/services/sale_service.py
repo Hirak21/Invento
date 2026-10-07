@@ -153,9 +153,11 @@ async def create_sale(
         for ing in recipe_full_data["ingredients"]:
             ing_key = str(ing.item_id)
             per_portion = to_decimal_number(ing.quantity)
+            # Decimal(str(...)): line quantities arrive as float (Pydantic),
+            # and Decimal * float raises TypeError — same guard as below.
             ingredient_demand[ing_key] = (
                 ingredient_demand.get(ing_key, Decimal("0"))
-                + per_portion * ref["quantity"]
+                + per_portion * Decimal(str(ref["quantity"]))
             )
 
     # Items that are BOTH sold directly and consumed as ingredients get their

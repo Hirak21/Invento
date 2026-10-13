@@ -6,12 +6,18 @@ TEST_DB_NAME = f"invento_test_{uuid4().hex[:8]}"
 os.environ["MONGO_DB"] = TEST_DB_NAME
 os.environ["ENVIRONMENT"] = "testing"
 
+
+# Local test override: use local rs0 replica set when LOCAL_TESTS=1.
+if os.environ.get("LOCAL_TESTS") == "1":
+    os.environ.setdefault("MONGO_URI", "mongodb://127.0.0.1:27017/?replicaSet=rs0")
+
 import pytest_asyncio  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 
 from app.core.security import hash_password  # noqa: E402
 from app.db.mongo import ensure_indexes, get_mongo_client, reset_mongo_client  # noqa: E402
 from app.main import app  # noqa: E402
+from app.routers.meta import router as meta_router  # noqa: E402
 from app.models.user import utc_now  # noqa: E402
 
 

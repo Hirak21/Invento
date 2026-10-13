@@ -47,13 +47,13 @@ export interface Sale {
   notes: string | null
   sold_at: string
   created_by_username: string | null
-  recipe_id: string | null
-  recipe_name: string | null
-  stay_id: string | null
-  room_number: string | null
-  order_status: OrderStatus
-  status_history: SaleStatusEvent[]
-  charge_settled: boolean | null
+  recipe_id?: string | null
+  recipe_name?: string | null
+  stay_id?: string | null
+  room_number?: string | null
+  order_status?: OrderStatus
+  status_history?: SaleStatusEvent[]
+  charge_settled?: boolean | null
 }
 
 export interface SaleListResponse {

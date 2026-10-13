@@ -4,14 +4,21 @@ from bson import ObjectId
 from fastapi import APIRouter, Query
 
 from app.models.purchase import (
+    PaymentStatus,
     PurchaseCreate,
     PurchaseListResponse,
     PurchaseOut,
     purchase_out_from_doc,
 )
 from app.routers.deps import CurrentUser, DBDep
-from app.services.purchase_service import build_purchase_query, create_purchase, get_purchase
+from app.services.purchase_service import (
+    build_purchase_query,
+    create_purchase,
+    get_purchase,
+    set_payment_status,
+)
 from app.utils.audit import log_audit
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/purchases", tags=["purchases"])
 
@@ -45,6 +52,7 @@ async def list_purchases(
     user: CurrentUser,
     business_unit_id: str | None = None,
     supplier_id: str | None = None,
+    payment_status: str | None = Query(default=None, pattern=r"^(paid|pending)$"),
     date_from: str | None = Query(default=None, alias="from", pattern=r"^\d{4}-\d{2}-\d{2}$"),
     date_to: str | None = Query(default=None, alias="to", pattern=r"^\d{4}-\d{2}-\d{2}$"),
     skip: int = Query(default=0, ge=0),
@@ -53,6 +61,7 @@ async def list_purchases(
     query = build_purchase_query(
         business_unit_id=business_unit_id,
         supplier_id=supplier_id,
+        payment_status=payment_status,
         date_from=date_from,
         date_to=date_to,
     )
@@ -67,4 +76,23 @@ async def get_purchase_detail(
     purchase_id: str, db: DBDep, user: CurrentUser
 ) -> PurchaseOut:
     doc = await get_purchase(db, purchase_id)
+    return purchase_out_from_doc(doc)
+
+
+class PaymentStatusUpdate(BaseModel):
+    payment_status: PaymentStatus
+
+
+@router.patch("/{purchase_id}/payment-status", response_model=PurchaseOut)
+async def update_purchase_payment_status(
+    purchase_id: str, payload: PaymentStatusUpdate, db: DBDep, user: CurrentUser
+) -> PurchaseOut:
+    """Settle a pending purchase (Clear Due) or reopen it. Persists to DB."""
+    doc = await set_payment_status(
+        db,
+        purchase_id,
+        payload.payment_status.value,
+        actor_id=str(user["_id"]),
+        actor_username=user["username"],
+    )
     return purchase_out_from_doc(doc)

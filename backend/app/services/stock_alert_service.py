@@ -2,6 +2,8 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from app.utils.units import to_decimal_number
+
 
 async def get_low_stock_items(
     db: AsyncIOMotorDatabase,
@@ -25,8 +27,11 @@ async def get_low_stock_items(
 
     results: list[dict[str, Any]] = []
     async for doc in cursor:
-        current = int(doc.get("current_stock", 0))
-        min_level = int(doc.get("min_stock_level", 0))
+        # Stocks may be stored as Decimal128 (exact-decimal $inc writes),
+        # plain int (legacy), float or str — parse uniformly. Missing/None
+        # means 0 (previously crashed with TypeError on Decimal128).
+        current = int(to_decimal_number(doc.get("current_stock", 0) or 0))
+        min_level = int(to_decimal_number(doc.get("min_stock_level", 0) or 0))
 
         if current <= 0 and not include_out:
             continue

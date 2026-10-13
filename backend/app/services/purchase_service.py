@@ -64,24 +64,30 @@ async def create_purchase(
             raise BusinessRuleError("Supplier not found.")
         supplier_name = supplier["name"]
 
-    # Merge duplicate lines pointing at the same item.
+    # Merge duplicate lines pointing at the same item *and* same GST rate.
+    # Same item with a different GST % stays a separate line so tax stays exact.
     merged: dict[str, dict[str, Any]] = {}
     for line in payload.items:
-        existing = merged.get(line.item_id)
+        gst = float(line.gst_percent or 0)
+        if gst < 0 or gst > 100:
+            raise BusinessRuleError("GST % must be between 0 and 100.")
+        key = f"{line.item_id}@@{gst}"
+        existing = merged.get(key)
         if existing:
             existing["quantity"] += line.quantity
             continue
-        merged[line.item_id] = {
+        merged[key] = {
             "item_id": line.item_id,
             "quantity": line.quantity,
             "unit_cost": line.unit_cost,
+            "gst_percent": gst,
         }
 
     item_docs: list[dict[str, Any]] = []
     for key, line in merged.items():
-        if not is_oid(key):
+        if not is_oid(key.split("@@")[0]):
             raise BusinessRuleError("One of the items does not exist.")
-        item = await db.inventory_items.find_one({"_id": oid(key)})
+        item = await db.inventory_items.find_one({"_id": oid(key.split("@@")[0])})
         if item is None:
             raise BusinessRuleError("One of the items does not exist.")
         if not item.get("active", False):
@@ -102,10 +108,20 @@ async def create_purchase(
 
     from decimal import Decimal as _Decimal
 
-    total = sum(
-        (parse_money(line["unit_cost"]) * _Decimal(str(line["quantity"])) for line in merged.values()),
-        start=_Decimal("0"),
-    )
+    def _line_math(unit_cost: str, qty: float, gst_pct: float) -> tuple[_Decimal, _Decimal, _Decimal]:
+        subtotal = parse_money(unit_cost) * _Decimal(str(qty))
+        gst_amt = (subtotal * _Decimal(str(gst_pct)) / _Decimal("100")).quantize(_Decimal("0.01"))
+        return subtotal, gst_amt, subtotal + gst_amt
+
+    subtotal = _Decimal("0")
+    gst_total = _Decimal("0")
+    for line in merged.values():
+        s, g, _t = _line_math(line["unit_cost"], line["quantity"], float(line.get("gst_percent", 0) or 0))
+        subtotal += s
+        gst_total += g
+    total = subtotal + gst_total
+    subtotal_amount = money_to_str(subtotal)
+    gst_amount_str = money_to_str(gst_total)
     total_amount = money_to_str(total)
 
     purchased_at = _parse_purchase_date(payload.date)
@@ -114,6 +130,8 @@ async def create_purchase(
         "supplier_id": payload.supplier_id or None,
         "supplier_name": supplier_name,
         "items": [],
+        "subtotal_amount": subtotal_amount,
+        "gst_amount": gst_amount_str,
         "total_amount": total_amount,
         "payment_method": payload.payment_method.value,
         "payment_status": payload.payment_status.value,
@@ -137,7 +155,10 @@ async def create_purchase(
                     item = line["doc"]
                     from decimal import Decimal as _Decimal2
 
-                    line_total = parse_money(line["unit_cost"]) * _Decimal2(str(line["quantity"]))
+                    _s, _g, _t = _line_math(line["unit_cost"], line["quantity"], float(line.get("gst_percent", 0) or 0))
+                    line_subtotal = money_to_str(_s)
+                    line_gst = money_to_str(_g)
+                    line_total = money_to_str(_t)
                     doc["items"].append(
                         {
                             "item_id": str(item["_id"]),
@@ -146,7 +167,10 @@ async def create_purchase(
                             "unit": item["base_unit"],
                             "unit_cost": line["unit_cost"],
                             "standard_purchase_price": line.get("item_purchase_price", item.get("purchase_price", "0")),
-                            "line_total": money_to_str(line_total),
+                            "gst_percent": float(line.get("gst_percent", 0) or 0),
+                            "line_subtotal": line_subtotal,
+                            "gst_amount": line_gst,
+                            "line_total": line_total,
                         }
                     )
                     from app.utils.units import decimal_to_mongo as _d2m
@@ -200,6 +224,7 @@ def build_purchase_query(
     *,
     business_unit_id: str | None = None,
     supplier_id: str | None = None,
+    payment_status: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> dict[str, Any]:
@@ -208,6 +233,8 @@ def build_purchase_query(
         query["business_unit_id"] = business_unit_id
     if supplier_id and is_oid(supplier_id):
         query["supplier_id"] = supplier_id
+    if payment_status in ("paid", "pending"):
+        query["payment_status"] = payment_status
     range_filter: dict[str, Any] = {}
     if date_from:
         start = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=UTC, hour=0, minute=0, second=0)
@@ -220,4 +247,41 @@ def build_purchase_query(
     return query
 
 
-__all__ = ["create_purchase", "get_purchase", "build_purchase_query"]
+__all__ = ["create_purchase", "get_purchase", "build_purchase_query", "set_payment_status"]
+
+
+async def set_payment_status(
+    db: AsyncIOMotorDatabase,
+    purchase_id: str,
+    payment_status: str,
+    *,
+    actor_id: str,
+    actor_username: str,
+) -> dict[str, Any]:
+    """Settle / reopen a purchase due. Persists payment_status; no stock effect."""
+    from app.services.ledger import parse_oid as _parse_oid
+    from app.utils.audit import log_audit as _log_audit
+
+    if payment_status not in ("paid", "pending"):
+        raise BusinessRuleError("payment_status must be 'paid' or 'pending'.")
+    doc = await get_purchase(db, purchase_id)
+    if doc.get("payment_status") == payment_status:
+        return doc
+    await db.purchases.update_one(
+        {"_id": doc["_id"]},
+        {"$set": {"payment_status": payment_status}},
+    )
+    await _log_audit(
+        db,
+        actor_id=actor_id,
+        actor_username=actor_username,
+        action="update",
+        entity_type="purchase",
+        entity_id=str(doc["_id"]),
+        before={"payment_status": doc.get("payment_status")},
+        after={"payment_status": payment_status},
+        business_unit_id=doc.get("business_unit_id"),
+    )
+    updated = await db.purchases.find_one({"_id": doc["_id"]})
+    assert updated is not None
+    return updated

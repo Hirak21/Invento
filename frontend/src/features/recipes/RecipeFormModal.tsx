@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 
 import { Button } from '@/components/ui/Button'
+import { FormSheet } from '@/components/ui/FormSheet'
 import { Input } from '@/components/ui/Input'
-import { Modal } from '@/components/ui/Modal'
+import { XMarkIcon } from '@/components/icons'
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
 import { listItems } from '@/services/masterData'
 import { addRecipeIngredient, createRecipe, getCompatibleUnits, removeRecipeIngredient, updateRecipe } from '@/services/recipes'
@@ -47,8 +48,14 @@ export function RecipeFormModal({ open, onClose, onSaved, initial, businessUnits
   const [notes, setNotes] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const errorRef = useRef<HTMLParagraphElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const quantityRef = useRef<HTMLInputElement>(null)
+
+  // Failed submits move keyboard/screen-reader focus to the error summary.
+  useEffect(() => {
+    if (error) errorRef.current?.focus()
+  }, [error])
 
   const isEditing = !!initial
 
@@ -214,13 +221,27 @@ export function RecipeFormModal({ open, onClose, onSaved, initial, businessUnits
   }
 
   return (
-    <Modal open={open} title={isEditing ? 'Edit recipe' : 'New recipe'} onClose={onClose} wide>
+    <FormSheet
+      open={open}
+      title={isEditing ? 'Edit recipe' : 'New recipe'}
+      onClose={onClose}
+      action={
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="secondary" size="lg" onClick={onClose} className="whitespace-nowrap">
+            Cancel
+          </Button>
+          <Button size="lg" pending={saving} type="submit" form="recipe-form" className="whitespace-nowrap">
+            {isEditing ? 'Save changes' : 'Create recipe'}
+          </Button>
+        </div>
+      }
+    >
       {!businessUnitId ? (
         <p className="py-6 text-center text-sm text-slate-500">
           No business unit available. Add one in Settings first.
         </p>
       ) : (
-        <form onSubmit={handleSubmit}>
+        <form id="recipe-form" onSubmit={handleSubmit}>
           <div className="grid grid-cols-1 gap-5 md:grid-cols-[1fr_300px]">
             <div className="min-w-0 space-y-4">
               <Input
@@ -274,12 +295,10 @@ export function RecipeFormModal({ open, onClose, onSaved, initial, businessUnits
                         <button
                           type="button"
                           onClick={() => removeIngredient(ing.clientId)}
-                          className="shrink-0 rounded-md p-1 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                          className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
                           aria-label={`Remove ${ing.item_name}`}
                         >
-                          <svg className="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                          </svg>
+                          <XMarkIcon className="h-5 w-5" />
                         </button>
                       </li>
                     ))}
@@ -346,7 +365,7 @@ export function RecipeFormModal({ open, onClose, onSaved, initial, businessUnits
                       <select
                         value={chosenUnit}
                         onChange={(e) => setChosenUnit(e.target.value)}
-                        className="mt-1 rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm"
+                        className="mt-1 min-h-[48px] rounded-xl border border-slate-300 bg-white px-2 text-sm"
                         aria-label="Ingredient unit"
                       >
                         {(compatibleUnits.length > 0 ? compatibleUnits : [selectedItem.base_unit]).map((u) => (
@@ -383,22 +402,13 @@ export function RecipeFormModal({ open, onClose, onSaved, initial, businessUnits
             </div>
           </div>
 
-          <div className="mt-5 flex justify-end gap-3 border-t border-slate-200 pt-4">
-            <Button type="button" onClick={onClose} variant="secondary">
-              Cancel
-            </Button>
-            <Button type="submit" pending={saving}>
-              {isEditing ? 'Save changes' : 'Create recipe'}
-            </Button>
-          </div>
-
           {error && (
-            <p role="alert" className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
+            <p ref={errorRef} tabIndex={-1} role="alert" className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400">
               {error}
             </p>
           )}
         </form>
       )}
-    </Modal>
+    </FormSheet>
   )
 }

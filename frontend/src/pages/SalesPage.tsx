@@ -3,13 +3,14 @@ import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Select'
 import { Input } from '@/components/ui/Input'
+import { PageHeader } from '@/components/ui/PageHeader'
 import { SaleFormModal } from '@/features/sales/SaleFormModal'
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
 import { listBusinessUnits } from '@/services/masterData'
 import { listSales } from '@/services/sales'
 import type { BusinessUnit } from '@/types/master'
 import { formatPaymentMethod } from '@/types/purchase'
-import type { Sale } from '@/types/sale'
+import type { Sale, OrderStatus } from '@/types/sale'
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString('en-IN', {
@@ -19,6 +20,18 @@ function formatDate(iso: string): string {
     hour: 'numeric',
     minute: '2-digit',
   })
+}
+
+function getOrderStatusBadge(status?: OrderStatus) {
+  if (!status) return <Badge tone="neutral">—</Badge>
+  const tones: Record<OrderStatus, 'neutral' | 'low' | 'healthy' | 'out'> = {
+    PENDING: 'neutral',
+    PREPARING: 'low',
+    READY: 'healthy',
+    SERVED: 'healthy',
+    CANCELLED: 'out',
+  }
+  return <Badge tone={tones[status]}>{status.toLowerCase()}</Badge>
 }
 
 export function SalesPage() {
@@ -61,22 +74,20 @@ export function SalesPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">Sales</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            {total} sale{total === 1 ? '' : 's'} recorded for this period.
-          </p>
-        </div>
-        <Button
-          onClick={() => {
-            setSuccessInfo(null)
-            setFormOpen(true)
-          }}
-        >
-          + New sale
-        </Button>
-      </div>
+      <PageHeader
+        title="Sales"
+        description={`${total} sale${total === 1 ? '' : 's'} recorded for this period.`}
+        actions={
+          <Button
+            onClick={() => {
+              setSuccessInfo(null)
+              setFormOpen(true)
+            }}
+          >
+            + New sale
+          </Button>
+        }
+      />
 
       {successInfo && (
         <p role="status" className="rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
@@ -85,7 +96,7 @@ export function SalesPage() {
         </p>
       )}
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-2 gap-2 sm:gap-3">
         <Input label="From" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
         <Input label="To" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
       </div>
@@ -126,13 +137,7 @@ export function SalesPage() {
                 </p>
                 <p className="mt-1 flex items-center gap-2 text-xs">
                   <span className="text-slate-500">{formatPaymentMethod(sale.payment_method)}</span>
-                  {sale.order_status === 'CANCELLED' ? (
-                    <Badge tone="out">cancelled</Badge>
-                  ) : sale.order_status !== 'SERVED' ? (
-                    <Badge tone="low">{sale.order_status.toLowerCase()}</Badge>
-                  ) : (
-                    <Badge tone="healthy">completed</Badge>
-                  )}
+                  {getOrderStatusBadge(sale.order_status)}
                 </p>
               </li>
             ))}
@@ -147,6 +152,7 @@ export function SalesPage() {
                 <th className="px-4 py-3 font-medium">Date</th>
                 <th className="px-4 py-3 font-medium">Items</th>
                 <th className="px-4 py-3 font-medium">Payment</th>
+                <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 text-right font-medium">Total</th>
               </tr>
             </thead>
@@ -161,9 +167,9 @@ export function SalesPage() {
                       : `${sale.items.reduce((n, line) => n + line.quantity, 0)} units of ${sale.items.length} items`}
                   </td>
                   <td className="px-4 py-3">
-                    <span className="text-slate-600">{formatPaymentMethod(sale.payment_method)}</span>{' '}
-                    <Badge tone="healthy">completed</Badge>
+                    <span className="text-slate-600">{formatPaymentMethod(sale.payment_method)}</span>
                   </td>
+                  <td className="px-4 py-3">{getOrderStatusBadge(sale.order_status)}</td>
                   <td className="px-4 py-3 text-right font-semibold text-slate-900">
                     ₹{Number(sale.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </td>

@@ -12,10 +12,20 @@
 
 name: invento
 
+# Container log rotation: without this, docker's json-file logs grow
+# unbounded (a 280MB backend log ate the 10GB disk on 2026-10-10).
+# Applies on next `docker compose up -d` (recreates containers).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   mongo:
     image: mongo:7
     restart: unless-stopped
+    logging: *default-logging
     # Small-VPS tuning: cap WiredTiger cache (default floor is 256MB+ and the
     # box only has ~1GB). 0.25GB is plenty for this workload.
     command: ["mongod", "--replSet", "rs0", "--bind_ip", "localhost,mongo", "--wiredTigerCacheSizeGB", "0.25"]
@@ -43,6 +53,7 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     env_file:
       - ./production.env
     depends_on:
@@ -58,6 +69,7 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "80:80"
       - "443:443"

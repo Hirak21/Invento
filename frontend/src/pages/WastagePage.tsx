@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
+import { PageHeader } from '@/components/ui/PageHeader'
 import { Select } from '@/components/ui/Select'
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
 import { listItems } from '@/services/masterData'
@@ -37,6 +38,12 @@ export function WastagePage() {
   const [notes, setNotes] = useState('')
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [pending, setPending] = useState(false)
+  const errorRef = useRef<HTMLParagraphElement>(null)
+
+  // Failed submits move keyboard/screen-reader focus to the message.
+  useEffect(() => {
+    if (error) errorRef.current?.focus()
+  }, [error])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -100,47 +107,53 @@ export function WastagePage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">Wastage</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Stock lost without a sale — every entry is traceable in the ledger.
-        </p>
-      </div>
+      <PageHeader
+        title="Wastage"
+        description="Stock lost without a sale — every entry is traceable in the ledger."
+      />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[400px_1fr]">
         <Card title="Record wastage">
-          <form onSubmit={handleSubmit} className="space-y-3">
-            <Select label="Item" value={itemId} onChange={(e) => setItemId(e.target.value)}>
-              <option value="">Select item…</option>
-              {items.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name} ({item.current_stock} {item.base_unit})
-                </option>
-              ))}
-            </Select>
+          <form onSubmit={handleSubmit} className="grid grid-cols-2 gap-2.5">
+            <div className="col-span-2">
+              <Select label="Item" value={itemId} onChange={(e) => setItemId(e.target.value)}>
+                <option value="">Select item…</option>
+                {items.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name} ({item.current_stock} {item.base_unit})
+                  </option>
+                ))}
+              </Select>
+            </div>
             <Input
               label="Quantity"
               value={quantity}
               onChange={(e) => setQuantity(e.target.value)}
               inputMode="numeric"
             />
-            <Select label="Reason" value={reason} onChange={(e) => setReason(e.target.value as WastageReason)}>
-              {WASTAGE_REASONS.map((r) => (
-                <option key={r.value} value={r.value}>
-                  {r.label}
-                </option>
-              ))}
-            </Select>
             <Input label="Date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-            <Input
-              label="Notes (optional)"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              maxLength={500}
-            />
-            <Button type="submit" pending={pending} className="w-full">
-              Record wastage
-            </Button>
+            <div className="col-span-2">
+              <Select label="Reason" value={reason} onChange={(e) => setReason(e.target.value as WastageReason)}>
+                {WASTAGE_REASONS.map((r) => (
+                  <option key={r.value} value={r.value}>
+                    {r.label}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div className="col-span-2">
+              <Input
+                label="Notes (optional)"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                maxLength={500}
+              />
+            </div>
+            <div className="col-span-2">
+              <Button type="submit" pending={pending} className="w-full" size="lg">
+                Record wastage
+              </Button>
+            </div>
           </form>
         </Card>
 
@@ -151,7 +164,7 @@ export function WastagePage() {
             </p>
           )}
           {!successMsg && error && (
-            <p role="alert" className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">
+            <p ref={errorRef} tabIndex={-1} role="alert" className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400">
               {error}
             </p>
           )}

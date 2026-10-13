@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { RestaurantOrderSheet } from '@/features/restaurant/RestaurantOrderSheet'
+import { CheckInSheet } from '@/features/rooms/CheckInSheet'
 import { Button } from '@/components/ui/Button'
 import { Card, EmptyState } from '@/components/ui/Card'
+import { PageHeader } from '@/components/ui/PageHeader'
 import { Input } from '@/components/ui/Input'
 import { Modal } from '@/components/ui/Modal'
 import { Select, StatusBadge } from '@/components/ui/Select'
 import { BottomSheet } from '@/components/ui/BottomSheet'
+import { useAuth } from '@/hooks/useAuth'
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
-import { checkIn, checkoutStay, createRoom, getStayBill, listRooms, listStays } from '@/services/rooms'
+import { checkoutStay, createRoom, getStayBill, listRooms, listStays } from '@/services/rooms'
 import { cancelOrder, listRestaurantOrders, updateOrderStatus } from '@/services/restaurantOrders'
 import type { OrderStatus, Sale } from '@/types/sale'
 import type { Room, StayBill } from '@/types/room'
@@ -55,15 +58,15 @@ const SETTLEMENT_METHODS = [
 ]
 
 export function RoomsPage() {
+  const { user } = useAuth()
+  const isOwner = user?.role === 'owner'
   const { selectedBuId, units, buStatus, buError, refreshUnits, setSelectedBuId } = useBusinessUnit()
   const [rooms, setRooms] = useState<Room[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // check-in flow
+  // check-in flow (shared sheet; room preselected from the room card)
   const [checkInRoom, setCheckInRoom] = useState<Room | null>(null)
-  const [guestName, setGuestName] = useState('')
-  const [checkInPending, setCheckInPending] = useState(false)
 
   // add room flow — explicit unit picker so All-units context never blocks creation
   const [addOpen, setAddOpen] = useState(false)
@@ -143,6 +146,7 @@ export function RoomsPage() {
   useEffect(() => {
     if (!addOpen) return
     setAddBuId(selectedBuId ?? units[0]?.id ?? '')
+    setNewRoomNumber('')
     setAddError(null)
   }, [addOpen, selectedBuId, units])
 
@@ -192,27 +196,6 @@ export function RoomsPage() {
       setError(err instanceof Error ? err.message : 'Could not load the bill.')
     } finally {
       setBillLoading(false)
-    }
-  }
-
-  async function handleCheckIn() {
-    if (!checkInRoom) return
-    if (!guestName.trim()) {
-      setError('Enter the guest name to check in.')
-      return
-    }
-    setCheckInPending(true)
-    setError(null)
-    try {
-      await checkIn({ room_id: checkInRoom.id, guest_name: guestName.trim() })
-      setCheckInRoom(null)
-      setGuestName('')
-      setDetailRoom(null)
-      await load()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Check-in failed.')
-    } finally {
-      setCheckInPending(false)
     }
   }
 
@@ -298,18 +281,18 @@ export function RoomsPage() {
   const detailStay = detailRoom ? openStayByRoom.get(detailRoom.id) ?? null : null
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">Rooms</h1>
-          <p className="mt-0.5 text-sm font-medium text-slate-600">
-            {loading ? 'Loading…' : rooms.length === 0 ? 'No rooms yet' : `${occupied}/${rooms.length} occupied`}
-          </p>
-        </div>
-        <Button variant="secondary" onClick={() => setAddOpen(true)}>
-          + Add room
-        </Button>
-      </div>
+    <div className="space-y-4">
+      <PageHeader
+        title="Rooms"
+        description={loading ? 'Loading…' : rooms.length === 0 ? 'No rooms yet' : `${occupied}/${rooms.length} occupied`}
+        actions={
+          isOwner ? (
+            <Button variant="secondary" onClick={() => setAddOpen(true)}>
+              + Add room
+            </Button>
+          ) : undefined
+        }
+      />
 
       {invalidStoredUnit && (
         <div role="alert" className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3">
@@ -531,7 +514,6 @@ export function RoomsPage() {
               onClick={() => {
                 if (!detailRoom) return
                 setCheckInRoom(detailRoom)
-                setGuestName('')
                 setError(null)
               }}
             >
@@ -624,30 +606,26 @@ export function RoomsPage() {
         )}
       </BottomSheet>
 
-      {/* Check-in modal */}
-      <Modal open={!!checkInRoom} title={checkInRoom ? `Check in — Room ${checkInRoom.room_number}` : ''} onClose={() => setCheckInRoom(null)}>
-        <div className="space-y-4">
-          <Input
-            label="Guest name"
-            value={guestName}
-            onChange={(e) => setGuestName(e.target.value)}
-            placeholder="e.g. Sharma"
-            autoComplete="off"
-          />
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setCheckInRoom(null)}>
-              Cancel
-            </Button>
-            <Button pending={checkInPending} onClick={() => void handleCheckIn()}>
-              Check in
-            </Button>
-          </div>
-        </div>
-      </Modal>
+      {/* Check-in sheet (shared with Dashboard New Guest) */}
+      <CheckInSheet
+        open={!!checkInRoom}
+        onClose={() => setCheckInRoom(null)}
+        onCheckedIn={() => {
+          setDetailRoom(null)
+          void load()
+        }}
+        initialRoomId={checkInRoom?.id ?? null}
+      />
 
       {/* Add room modal */}
       <Modal open={addOpen} title="Add room" onClose={() => setAddOpen(false)}>
-        <div className="space-y-4">
+        <form
+          className="space-y-4"
+          onSubmit={(e) => {
+            e.preventDefault()
+            void handleAddRoom()
+          }}
+        >
           <Select
             label="Business unit"
             value={addBuId}
@@ -672,6 +650,8 @@ export function RoomsPage() {
             onChange={(e) => setNewRoomNumber(e.target.value)}
             placeholder="e.g. 101"
             autoComplete="off"
+            inputMode="numeric"
+            maxLength={20}
           />
           {addError && (
             <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-800">
@@ -682,11 +662,11 @@ export function RoomsPage() {
             <Button variant="ghost" onClick={() => setAddOpen(false)}>
               Cancel
             </Button>
-            <Button pending={addPending} onClick={() => void handleAddRoom()}>
+            <Button type="submit" pending={addPending}>
               Add room
             </Button>
           </div>
-        </div>
+        </form>
       </Modal>
 
       {/* Bill modal */}

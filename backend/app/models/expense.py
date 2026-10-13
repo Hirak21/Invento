@@ -14,8 +14,20 @@ class ExpenseCategory(str, Enum):
     CLEANING = "cleaning"
     PACKAGING = "packaging"
     SUPPLIES = "supplies"
+    STAFF_SALARY = "staff_salary"
     RENT = "rent"
     OTHER = "other"
+
+
+BUILT_IN_EXPENSE_CATEGORIES = {c.value for c in ExpenseCategory}
+
+
+def normalize_expense_category(raw: str) -> str:
+    """Slug for custom categories: lowercase, spaces→underscores, [a-z0-9_]."""
+    import re as _re
+
+    slug = _re.sub(r"[^a-z0-9]+", "_", (raw or "").strip().lower()).strip("_")
+    return slug
 
 
 EXPENSE_CATEGORY_LABELS = {
@@ -25,14 +37,23 @@ EXPENSE_CATEGORY_LABELS = {
     ExpenseCategory.CLEANING: "Cleaning",
     ExpenseCategory.PACKAGING: "Packaging",
     ExpenseCategory.SUPPLIES: "Supplies",
+    ExpenseCategory.STAFF_SALARY: "Staff Salary",
     ExpenseCategory.RENT: "Rent",
     ExpenseCategory.OTHER: "Other",
 }
 
 
+def expense_category_label(value: str) -> str:
+    if value in EXPENSE_CATEGORY_LABELS:
+        return EXPENSE_CATEGORY_LABELS[ExpenseCategory(value)]
+    return value.replace("_", " ").title() if value else value
+
+
 class ExpenseCreate(BaseModel):
     business_unit_id: str
-    category: ExpenseCategory
+    # Built-in enum value or a custom slug registered via /expenses/categories.
+    # Validated in the service layer (DB-backed) so custom categories work.
+    category: str = Field(min_length=1, max_length=60)
     amount: MoneyAmount
     payment_method: PaymentMethod = PaymentMethod.CASH
     payment_status: PaymentStatus = PaymentStatus.PAID
@@ -48,7 +69,7 @@ class ExpenseOut(BaseModel):
     id: str
     expense_number: str
     business_unit_id: str
-    category: ExpenseCategory
+    category: str
     amount: str
     payment_method: PaymentMethod
     payment_status: PaymentStatus
@@ -71,7 +92,7 @@ def expense_out_from_doc(doc: dict) -> ExpenseOut:
         id=str(doc["_id"]),
         expense_number=doc["expense_number"],
         business_unit_id=doc["business_unit_id"],
-        category=ExpenseCategory(doc["category"]),
+        category=str(doc["category"]),
         amount=doc["amount"],
         payment_method=PaymentMethod(doc["payment_method"]),
         payment_status=PaymentStatus(doc.get("payment_status", "paid")),

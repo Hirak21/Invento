@@ -4,6 +4,7 @@ import type { PaymentMethod, PaymentStatus, Purchase, PurchaseListResponse } fro
 export interface PurchaseFilters {
   business_unit_id?: string
   supplier_id?: string
+  payment_status?: PaymentStatus
   from?: string
   to?: string
 }
@@ -12,6 +13,7 @@ export function listPurchases(filters: PurchaseFilters = {}): Promise<PurchaseLi
   const params = new URLSearchParams()
   if (filters.business_unit_id) params.set('business_unit_id', filters.business_unit_id)
   if (filters.supplier_id) params.set('supplier_id', filters.supplier_id)
+  if (filters.payment_status) params.set('payment_status', filters.payment_status)
   if (filters.from) params.set('from', filters.from)
   if (filters.to) params.set('to', filters.to)
   const qs = params.toString()
@@ -22,6 +24,7 @@ export interface PurchaseLinePayload {
   item_id: string
   quantity: number
   unit_cost: string
+  gst_percent?: number
 }
 
 export function createPurchase(body: {
@@ -36,6 +39,13 @@ export function createPurchase(body: {
   idempotency_key: string
 }): Promise<Purchase> {
   return apiFetch<Purchase>('/purchases', { method: 'POST', body })
+}
+
+export function setPurchasePaymentStatus(id: string, payment_status: PaymentStatus): Promise<Purchase> {
+  return apiFetch<Purchase>(`/purchases/${id}/payment-status`, {
+    method: 'PATCH',
+    body: { payment_status },
+  })
 }
 
 export function getPurchase(id: string): Promise<Purchase> {

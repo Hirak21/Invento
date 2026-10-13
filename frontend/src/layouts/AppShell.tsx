@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 
 import { BottomSheet } from '@/components/ui/BottomSheet'
+import { ServerModeBanner } from '@/components/ServerModeBanner'
 import { useAuth } from '@/hooks/useAuth'
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
 import { SaleFormModal } from '@/features/sales/SaleFormModal'
@@ -10,7 +11,7 @@ import {
   ArrowRightOnRectangleIcon,
   CartIcon,
   ClipboardListIcon,
-  CubeTransparentIcon,
+  StockIcon,
   EllipsisHorizontalIcon,
   HomeIcon,
   PlusIcon,
@@ -25,7 +26,7 @@ import {
 const PRIMARY_NAV = [
   { to: '/dashboard', label: 'Home', icon: HomeIcon },
   { to: '/sales', label: 'Sales', icon: CartIcon },
-  { to: '/inventory', label: 'Stock', icon: CubeTransparentIcon },
+  { to: '/inventory', label: 'Stock', icon: StockIcon },
 ] as const
 
 const MORE_GROUPS = [
@@ -285,8 +286,8 @@ function BottomNav({ onNewSale }: { onNewSale: () => void }) {
         </div>
       </nav>
 
-      <BottomSheet open={moreOpen} onClose={() => setMoreOpen(false)} title="More">
-        <div className="space-y-5">
+      <BottomSheet open={moreOpen} onClose={() => setMoreOpen(false)} title="More" height="half">
+        <div className="space-y-5 pb-2">
           {MORE_GROUPS.map((group) => (
             <section key={group.title} aria-label={group.title}>
               <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
@@ -336,6 +337,7 @@ export function AppShell() {
 
   return (
     <div className="flex min-h-dvh flex-col">
+      <ServerModeBanner />
       {/* Slim mobile header — brand + unit + logout icon only */}
       <header className="sticky top-0 z-[200] flex h-14 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3 md:hidden">
         <span className="shrink-0 text-base font-bold text-[var(--color-accent)]">Invento</span>
@@ -417,7 +419,7 @@ export function AppShell() {
             <span className="truncate text-sm font-medium text-[var(--color-text-secondary)]">{user?.username}</span>
           </header>
 
-          <main className="mx-auto w-full max-w-7xl flex-1 px-3 py-4 pb-24 md:px-6 md:pb-6">
+          <main className="mx-auto w-full max-w-[1500px] flex-1 px-3 py-4 pb-24 md:px-8 md:pb-8">
             <Outlet />
           </main>
         </div>

@@ -211,3 +211,33 @@ access via your provider's web panel:
   1. Log in with the key (section B).
   2. Run:  passwd
   3. Type the new password twice. Done. (It still can't be used over SSH.)
+
+--- E. APP LOGIN + AUTOMATIC STANDBY (wired 2026-10-11) ---
+
+Shop app: https://invento-lite.web.app
+  Username: platiodevelopers@gmail.com
+  Password: Platio9080            (owner account; type carefully — 5 wrong
+                                  tries in a row look exactly like "login
+                                  is broken", then the right password works)
+
+How the two servers behave now (frontend tries in this order):
+  1. PRIMARY = VPS https://invento-lite.duckdns.org (fast, live data).
+  2. STANDBY = Render https://invento-0pap.onrender.com (free tier, sleeps
+     when idle, takes ~30-60s to wake; used ONLY if the VPS is unreachable).
+While on standby the app shows an amber banner with a "Retry main server"
+button. After a failover, log in again on the standby — login tokens are
+per-server and do not carry over.
+
+Know the trade-offs:
+  * Standby data is OLD (VPS database copy from 2026-10-07 plus anything
+    done directly on Render since). After a VPS outage, check which sales/
+    purchases happened on the standby and re-enter them on the VPS.
+  * The stock-alerts crash (Decimal128, 2026-10-09) and container-log
+    rotation (max 3x10MB per container) were fixed on the VPS on 2026-10-11.
+  * Disk on the 10GB VPS (2026-10-11: 7.2G used / 78%): ~2.0G swapfile
+    (needed, leave it), ~1.8G containerd leftovers (orphaned image layers,
+    safe to leave), ~1.6G docker images, ~0.4G mongo data. If it fills up
+    again run: apt-get clean, docker builder prune -f, and check
+    /var/lib/docker/containers/*/*-json.log sizes.
+  * Render dashboard (suspend/resume standby): dashboard.render.com ->
+    service invento-lite-backend. Do NOT delete it — it is the rollback.

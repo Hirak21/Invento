@@ -1,93 +1,92 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { Button } from '@/components/ui/Button'
-import { Card } from '@/components/ui/Card'
+import { ConfirmDialog, Modal } from '@/components/ui/Modal'
+import { Badge } from '@/components/ui/Select'
+import { PageHeader } from '@/components/ui/PageHeader'
+import { XMarkIcon } from '@/components/icons'
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
 import { deleteRecipe, listRecipes } from '@/services/recipes'
 import type { RecipeWithIngredients } from '@/types/recipe'
 import { formatDate } from '@/types/inventory'
+import { RecipeFormModal } from '@/features/recipes/RecipeFormModal'
 
-function ConfirmDeleteModal({
-  onClose,
-  onConfirm,
-}: {
-  onClose: () => void
-  onConfirm: () => void
-}) {
-  return (
-    <Card className="rounded-xl border border-red-200 bg-red-50 p-4">
-      <h3 className="text-sm font-semibold text-red-800">Delete this recipe?</h3>
-      <p className="mt-1 text-sm text-red-700">This cannot be undone. Ingredients will be removed.</p>
-      <div className="mt-4 flex justify-end gap-2">
-        <Button type="button" variant="secondary" onClick={onClose} className="px-3">
-          Cancel
-        </Button>
-        <Button type="button" variant="danger" onClick={onConfirm} className="px-3">
-          Delete
-        </Button>
-      </div>
-    </Card>
-  )
+function marginLabel(price: string | null, cost: string | null): string | null {
+  const p = price ? Number(price) : 0
+  const c = cost ? Number(cost) : 0
+  if (!Number.isFinite(p) || p <= 0 || !Number.isFinite(c)) return null
+  return `${(((p - c) / p) * 100).toFixed(0)}% margin`
 }
 
 function RecipeDetailModal({
   onClose,
   recipe,
+  onEdit,
 }: {
   onClose: () => void
   recipe: RecipeWithIngredients | null
+  onEdit: (recipe: RecipeWithIngredients) => void
 }) {
   if (!recipe) return null
+  const margin = marginLabel(recipe.recipe.selling_price, recipe.recipe.estimated_cost)
   return (
-    <div className="fixed inset-0 z-40 flex items-end justify-center sm:items-center">
-      <div className="absolute inset-0 bg-slate-900/40" aria-hidden="true" onClick={onClose} />
-      <div className="relative max-h-[92dvh] w-full overflow-y-auto rounded-t-xl border border-slate-200 bg-white p-5 shadow-xl sm:rounded-xl sm:max-w-2xl">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-slate-900">{recipe.recipe.name}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100"
-          >
-            <svg className="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
+    <Modal open title={recipe.recipe.name} onClose={onClose} wide>
+      <div className="space-y-4">
         {recipe.recipe.description && (
-          <p className="mb-4 text-sm text-slate-600">{recipe.recipe.description}</p>
+          <p className="text-sm text-slate-600">{recipe.recipe.description}</p>
         )}
-        <div className="mb-4 flex flex-wrap items-center gap-3 text-sm text-slate-500">
-          <span>Created {formatDate(recipe.recipe.created_at)}</span>
-          {recipe.recipe.updated_at !== recipe.recipe.created_at && (
-            <span>Updated {formatDate(recipe.recipe.updated_at)}</span>
+        <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <DetailStat label="Menu price" value={recipe.recipe.selling_price ? `₹${Number(recipe.recipe.selling_price).toFixed(2)}` : '—'} strong />
+          <DetailStat label="Est. cost" value={recipe.recipe.estimated_cost ? `₹${Number(recipe.recipe.estimated_cost).toFixed(2)}` : '—'} />
+          <DetailStat label="Margin" value={margin ?? '—'} strong={!!margin} />
+          <DetailStat
+            label="Status"
+            value={<Badge tone={recipe.recipe.active ? 'healthy' : 'neutral'} size="sm">{recipe.recipe.active ? 'Active' : 'Inactive'}</Badge>}
+          />
+        </dl>
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-slate-900">Ingredients ({recipe.ingredients.length})</h3>
+          {recipe.ingredients.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+              No ingredients added yet.
+            </p>
+          ) : (
+            <ul className="space-y-1.5">
+              {recipe.ingredients.map((ing) => (
+                <li key={ing.id} className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
+                  <span className="min-w-0 truncate font-medium text-slate-900">{ing.item_name}</span>
+                  <span className="shrink-0 tabular-nums text-slate-600">
+                    {ing.entered_quantity ?? ing.quantity} {ing.entered_unit ?? ing.unit}
+                  </span>
+                </li>
+              ))}
+            </ul>
           )}
-          {recipe.recipe.selling_price && (
-            <span className="font-semibold text-slate-700">Menu ₹{Number(recipe.recipe.selling_price).toFixed(2)}</span>
-          )}
-          {recipe.recipe.estimated_cost && (
-            <span>Cost ₹{Number(recipe.recipe.estimated_cost).toFixed(2)}</span>
+          {recipe.ingredients.length > 0 && (
+            <p className="mt-1 text-xs text-slate-400">
+              Created {formatDate(recipe.recipe.created_at)}
+              {recipe.recipe.updated_at !== recipe.recipe.created_at && ` · Updated ${formatDate(recipe.recipe.updated_at)}`}
+            </p>
           )}
         </div>
-        <h3 className="mb-2 text-sm font-semibold text-slate-900">Ingredients ({recipe.ingredients.length})</h3>
-        {recipe.ingredients.length === 0 ? (
-          <p className="text-sm text-slate-500">No ingredients added yet.</p>
-        ) : (
-          <ul className="divide-y divide-slate-200">
-            {recipe.ingredients.map((ing) => (
-              <li key={ing.id} className="py-2 text-sm">
-                <span className="font-medium text-slate-900">{ing.entered_quantity ?? ing.quantity} {ing.entered_unit ?? ing.unit}</span>
-                {' '}
-                <span className="text-slate-700">{ing.item_name}</span>
-                {ing.notes && (
-                  <span className="ml-2 text-slate-400">— {ing.notes}</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
+        <div className="flex justify-end gap-2 border-t border-slate-200 pt-3">
+          <Button variant="secondary" onClick={onClose}>
+            Close
+          </Button>
+          <Button onClick={() => onEdit(recipe)}>
+            Edit recipe
+          </Button>
+        </div>
       </div>
+    </Modal>
+  )
+}
+
+function DetailStat({ label, value, strong = false }: { label: string; value: React.ReactNode; strong?: boolean }) {
+  return (
+    <div className="rounded-xl bg-slate-50 px-3 py-2">
+      <dt className="text-xs font-medium text-slate-500">{label}</dt>
+      <dd className={`mt-0.5 tabular-nums ${strong ? 'text-base font-bold text-slate-900' : 'text-sm font-semibold text-slate-700'}`}>{value}</dd>
     </div>
   )
 }
@@ -101,6 +100,7 @@ export function RecipesPage() {
   const [editingRecipe, setEditingRecipe] = useState<RecipeWithIngredients | null>(null)
   const [detailRecipe, setDetailRecipe] = useState<RecipeWithIngredients | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<RecipeWithIngredients | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const loadRecipes = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -123,12 +123,16 @@ export function RecipesPage() {
 
   async function handleDelete() {
     if (!deleteTarget) return
+    setDeleting(true)
     try {
       await deleteRecipe(deleteTarget.recipe.id)
       setRecipes((prev) => prev.filter((r) => r.recipe.id !== deleteTarget.recipe.id))
       setDeleteTarget(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not delete recipe.')
+      setDeleteTarget(null)
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -144,102 +148,109 @@ export function RecipesPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">Recipes</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Bill-of-materials templates for menu items.
-        </p>
-      </div>
-
-      {selectedBuId && (
-        <div className="flex justify-end">
-          <Button onClick={() => setFormOpen(true)}>+ New recipe</Button>
-        </div>
-      )}
+    <div className="space-y-4">
+      <PageHeader
+        title="Recipes"
+        description="Bill-of-materials templates for menu items."
+        actions={
+          selectedBuId ? (
+            <Button onClick={() => setFormOpen(true)}>+ New recipe</Button>
+          ) : undefined
+        }
+      />
 
       {loading ? (
-        <div className="flex items-center justify-center py-16">
-          <span className="size-8 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent" />
-          <span className="ml-3 text-sm text-slate-500">Loading recipes…</span>
+        <div className="space-y-2" aria-label="Loading recipes">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="skeleton h-20 rounded-2xl" />
+          ))}
         </div>
       ) : error ? (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-          {error}
+        <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
+          <p className="text-sm font-medium text-red-800">{error}</p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={() => void loadRecipes()}>
+            Retry
+          </Button>
         </div>
       ) : recipes.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-          <p className="text-sm font-medium text-slate-500">No recipes yet.</p>
-          <p className="mt-1 text-xs text-slate-400">
+        <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+          <p className="text-sm font-semibold text-slate-700">No recipes yet.</p>
+          <p className="mt-1 text-xs text-slate-500">
             {selectedBuId
               ? 'Create your first recipe to use it in sales.'
               : 'Select a business unit to see recipes.'}
           </p>
+          {selectedBuId && (
+            <Button size="sm" className="mt-3" onClick={() => setFormOpen(true)}>
+              + New recipe
+            </Button>
+          )}
         </div>
       ) : (
-        <div className="divide-y divide-slate-200">
-          {recipes.map((recipe) => (
-            <div
-              key={recipe.recipe.id}
-              className="rounded-lg border border-slate-200 bg-white px-4 py-3 transition-colors hover:border-indigo-200"
-              onClick={() => setDetailRecipe(recipe)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
-                  setDetailRecipe(recipe)
-                }
-              }}
-            >
-              <div className="flex items-center justify-between gap-4">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <h3 className="truncate text-base font-semibold text-slate-900">{recipe.recipe.name}</h3>
-                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium capitalize ${
-                      recipe.recipe.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
-                    }`}>
-                      {recipe.recipe.active ? 'Active' : 'Inactive'}
-                    </span>
+        <ul className="space-y-2">
+          {recipes.map((recipe) => {
+            const margin = marginLabel(recipe.recipe.selling_price, recipe.recipe.estimated_cost)
+            return (
+            <li key={recipe.recipe.id}>
+              <div
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm transition-colors hover:border-emerald-300 active:bg-slate-50"
+                onClick={() => setDetailRecipe(recipe)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    setDetailRecipe(recipe)
+                  }
+                }}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="truncate text-[15px] font-bold text-slate-900">{recipe.recipe.name}</h3>
+                      <Badge tone={recipe.recipe.active ? 'healthy' : 'neutral'} size="sm">
+                        {recipe.recipe.active ? 'Active' : 'Inactive'}
+                      </Badge>
+                    </div>
+                    <p className="mt-0.5 truncate text-xs text-slate-500">
+                      {recipe.ingredients.length} ingredient{recipe.ingredients.length !== 1 ? 's' : ''}
+                      {recipe.recipe.selling_price && ` · Menu ₹${Number(recipe.recipe.selling_price).toFixed(0)}`}
+                      {margin && <span className="font-semibold text-emerald-700"> · {margin}</span>}
+                    </p>
                   </div>
-                  {recipe.recipe.description && (
-                    <p className="mt-0.5 truncate text-sm text-slate-500">{recipe.recipe.description}</p>
-                  )}
-                  <div className="mt-1 flex items-center gap-3 text-xs text-slate-400">
-                    <span>{recipe.ingredients.length} ingredient{recipe.ingredients.length !== 1 ? 's' : ''}</span>
-                    <span>·</span>
-                    <span>Updated {formatDate(recipe.recipe.updated_at)}</span>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        openEdit(recipe)
+                      }}
+                      aria-label={`Edit ${recipe.recipe.name}`}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setDeleteTarget(recipe)
+                      }}
+                      className="min-h-[44px] min-w-[44px] text-red-700 hover:bg-red-50"
+                      aria-label={`Delete ${recipe.recipe.name}`}
+                    >
+                      <XMarkIcon className="h-5 w-5" />
+                    </Button>
                   </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      openEdit(recipe)
-                    }}
-                  >
-                    Edit
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setDeleteTarget(recipe)
-                    }}
-                    className="text-red-600 hover:bg-red-50"
-                  >
-                    Delete
-                  </Button>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
+            </li>
+            )
+          })}
+        </ul>
       )}
 
       {formOpen && (
@@ -258,22 +269,24 @@ export function RecipesPage() {
         <RecipeDetailModal
           onClose={() => setDetailRecipe(null)}
           recipe={detailRecipe}
+          onEdit={(r) => {
+            setDetailRecipe(null)
+            openEdit(r)
+          }}
         />
       )}
 
-      {deleteTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-slate-900/40" onClick={() => setDeleteTarget(null)} />
-          <Card className="relative w-full max-w-sm">
-            <ConfirmDeleteModal
-              onClose={() => setDeleteTarget(null)}
-              onConfirm={handleDelete}
-            />
-          </Card>
-        </div>
-      )}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="Delete recipe?"
+        message={`Delete “${deleteTarget?.recipe.name ?? ''}”? This cannot be undone. Ingredients will be removed.`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        variant="destructive"
+        loading={deleting}
+        onConfirm={handleDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   )
 }
-
-import { RecipeFormModal } from '@/features/recipes/RecipeFormModal'

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { EmptyState } from '@/components/ui/Card'
+import { PageHeader } from '@/components/ui/PageHeader'
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
 import { listStockAlerts } from '@/services/stockAlerts'
 import type { StockAlert } from '@/types/stockAlert'
@@ -38,19 +39,16 @@ export function StockAlertsPage() {
   const lowStock = alerts.filter((a) => a.status === 'low')
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">Stock Alerts</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Items that are running low or have run out.
-        </p>
-      </div>
-
-      <div className="flex justify-end">
-        <Button type="button" onClick={loadAlerts} pending={loading}>
-          Refresh
-        </Button>
-      </div>
+    <div className="space-y-4">
+      <PageHeader
+        title="Stock Alerts"
+        description="Items that are running low or have run out."
+        actions={
+          <Button type="button" variant="secondary" onClick={loadAlerts} pending={loading}>
+            Refresh
+          </Button>
+        }
+      />
 
       {loading ? (
         <div className="flex items-center justify-center py-16">

@@ -33,6 +33,11 @@ export function Modal({ open, title, onClose, children, size = 'md', wide = fals
   const overlayRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const previousActiveElement = useRef<HTMLElement | null>(null)
+  // Ref indirection: parent re-renders (e.g. typing in a field creates a new
+  // onClose identity) must NOT re-run the open effect — that would yank focus
+  // back to the first element and dismiss the mobile keyboard mid-typing.
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
 
   useEffect(() => {
     if (!open) return
@@ -42,7 +47,7 @@ export function Modal({ open, title, onClose, children, size = 'md', wide = fals
     // Trap focus
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        onClose()
+        onCloseRef.current()
         return
       }
 
@@ -81,7 +86,7 @@ export function Modal({ open, title, onClose, children, size = 'md', wide = fals
       document.body.style.overflow = ''
       previousActiveElement.current?.focus()
     }
-  }, [open, onClose])
+  }, [open])
 
   if (!open) return null
 

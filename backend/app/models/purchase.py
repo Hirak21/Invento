@@ -24,6 +24,8 @@ class PurchaseLineIn(BaseModel):
     # Decimal-safe: kg/g accept any positive decimal; no integer restriction.
     quantity: float = Field(gt=0)
     unit_cost: MoneyAmount
+    # GST % per line (e.g. 2.5, 5, 12, 18, 28). Defaults to 0 for legacy clients.
+    gst_percent: float = Field(default=0, ge=0, le=100)
 
 
 class PurchaseCreate(BaseModel):
@@ -46,6 +48,9 @@ class PurchaseLineOut(BaseModel):
     unit: str
     unit_cost: str
     standard_purchase_price: str | None = None
+    gst_percent: float = 0
+    line_subtotal: str | None = None
+    gst_amount: str | None = None
     line_total: str
 
 
@@ -56,6 +61,8 @@ class PurchaseOut(BaseModel):
     supplier_id: str | None
     supplier_name: str | None = None
     items: list[PurchaseLineOut]
+    subtotal_amount: str | None = None
+    gst_amount: str | None = None
     total_amount: str
     payment_method: PaymentMethod
     payment_status: PaymentStatus
@@ -80,10 +87,15 @@ def purchase_out_from_doc(doc: dict) -> PurchaseOut:
                 unit=line["unit"],
                 unit_cost=line["unit_cost"],
                 standard_purchase_price=line.get("standard_purchase_price"),
+                gst_percent=float(line.get("gst_percent", 0) or 0),
+                line_subtotal=line.get("line_subtotal"),
+                gst_amount=line.get("gst_amount"),
                 line_total=line["line_total"],
             )
             for line in doc["items"]
         ],
+        subtotal_amount=doc.get("subtotal_amount"),
+        gst_amount=doc.get("gst_amount"),
         total_amount=doc["total_amount"],
         payment_method=PaymentMethod(doc["payment_method"]),
         payment_status=PaymentStatus(doc["payment_status"]),

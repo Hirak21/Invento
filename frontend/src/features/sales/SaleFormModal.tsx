@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 
 import { Button } from '@/components/ui/Button'
+import { FormSheet } from '@/components/ui/FormSheet'
 import { Input } from '@/components/ui/Input'
-import { Modal, shouldAutoFocusForModal } from '@/components/ui/Modal'
+import { shouldAutoFocusForModal } from '@/components/ui/Modal'
 import { Select } from '@/components/ui/Select'
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
 import { listItems } from '@/services/masterData'
@@ -71,7 +72,7 @@ function CartQtyInput({
           setDraft(null)
           onStep(-1)
         }}
-        className="px-2 py-0.5 text-slate-600 hover:bg-slate-100"
+        className="flex min-h-[44px] min-w-[44px] items-center justify-center px-2 text-base text-slate-600 hover:bg-slate-100"
       >
         −
       </button>
@@ -87,7 +88,7 @@ function CartQtyInput({
         onKeyDown={(e) => {
           if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
         }}
-        className="w-16 border-x border-slate-200 px-1 py-0.5 text-center tabular-nums outline-none"
+        className="w-14 border-x border-slate-200 px-1 py-2 text-center text-sm tabular-nums outline-none"
       />
       <button
         type="button"
@@ -96,7 +97,7 @@ function CartQtyInput({
           setDraft(null)
           onStep(1)
         }}
-        className="px-2 py-0.5 text-slate-600 hover:bg-slate-100"
+        className="flex min-h-[44px] min-w-[44px] items-center justify-center px-2 text-base text-slate-600 hover:bg-slate-100"
       >
         +
       </button>
@@ -163,6 +164,12 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [idempotencyKey, setIdempotencyKey] = useState('')
+  const errorRef = useRef<HTMLParagraphElement>(null)
+
+  // Failed submits move keyboard/screen-reader focus to the error summary.
+  useEffect(() => {
+    if (error) errorRef.current?.focus()
+  }, [error])
   const searchRef = useRef<HTMLInputElement>(null)
   const menuSearchRef = useRef<HTMLInputElement>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -382,20 +389,40 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
   }
 
   return (
-    <Modal open={open} title="New sale" onClose={onClose} wide>
+    <FormSheet
+      open={open}
+      title="New sale"
+      onClose={onClose}
+      startExpanded
+      action={
+        <div className="flex items-center gap-3">
+          <div className="min-w-0 shrink-0">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              {cart.reduce((n, l) => n + l.quantity, 0)} item(s)
+            </p>
+            <p className="text-lg font-bold tabular-nums leading-tight text-slate-900">
+              ₹{total.toFixed(2)}
+            </p>
+          </div>
+          <Button size="lg" pending={pending} type="submit" form="sale-form" className="min-w-0 flex-1 whitespace-nowrap">
+            Complete sale
+          </Button>
+        </div>
+      }
+    >
       {!businessUnitId ? (
         <p className="py-6 text-center text-sm text-slate-500">
           No business unit available. Add one in Settings first.
         </p>
       ) : (
-        <form onSubmit={handleSubmit}>
-          <div className="grid grid-cols-1 gap-5 md:grid-cols-[1fr_260px]">
+        <form id="sale-form" onSubmit={handleSubmit}>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_260px] md:gap-5">
             <div className="min-w-0">
               <div className="flex border-b border-slate-200">
                 <button
                   type="button"
                   onClick={() => setSelectedMenuTab('items')}
-                  className={`flex-1 rounded-t-lg px-4 py-2 text-sm font-medium transition-colors ${
+                  className={`min-h-[44px] flex-1 rounded-t-lg px-4 py-2 text-sm font-medium transition-colors ${
                     selectedMenuTab === 'items'
                       ? 'border-b-2 border-indigo-600 text-indigo-700 bg-indigo-50/50'
                       : 'text-slate-600 hover:bg-slate-100'
@@ -406,7 +433,7 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
                 <button
                   type="button"
                   onClick={() => setSelectedMenuTab('menu')}
-                  className={`flex-1 rounded-t-lg px-4 py-2 text-sm font-medium transition-colors ${
+                  className={`min-h-[44px] flex-1 rounded-t-lg px-4 py-2 text-sm font-medium transition-colors ${
                     selectedMenuTab === 'menu'
                       ? 'border-b-2 border-indigo-600 text-indigo-700 bg-indigo-50/50'
                       : 'text-slate-600 hover:bg-slate-100'
@@ -418,24 +445,27 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
 
               {selectedMenuTab === 'items' ? (
                 <>
-                  <Input
-                    ref={searchRef}
-                    label=""
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        if (results.length > 0) addItemToCart(results[0])
-                      }
-                    }}
-                    placeholder="Search item by name or SKU… (Enter adds first result)"
-                    autoComplete="off"
-                  />
+                  <div className="mt-2">
+                    <Input
+                      ref={searchRef}
+                      label=""
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          if (results.length > 0) addItemToCart(results[0])
+                        }
+                      }}
+                      placeholder="Search items… (Enter adds first)"
+                      autoComplete="off"
+                    />
+                  </div>
                   {searching && <p className="mt-2 text-xs text-slate-400">Searching…</p>}
-                  <ul className="mt-3 max-h-72 space-y-1 overflow-y-auto pr-1">
+                  {/* Two-column tappable card grid on mobile, list on desktop */}
+                  <ul className="mt-2 grid max-h-40 grid-cols-2 gap-2 overflow-y-auto pr-0.5 md:max-h-72 md:grid-cols-1 md:gap-1">
                     {results.length === 0 && !searching ? (
-                      <li className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                      <li className="col-span-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 md:col-span-1">
                         No items found{search ? ` for "${search}"` : ''}. Add items in Inventory first.
                       </li>
                     ) : (
@@ -445,16 +475,16 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
                             type="button"
                             onClick={() => addItemToCart(item)}
                             disabled={item.current_stock <= 0}
-                            className="flex w-full items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-left transition-colors hover:border-indigo-300 hover:bg-indigo-50/60 disabled:opacity-40"
+                            className="flex min-h-[76px] w-full flex-col justify-between rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-left transition-colors hover:border-indigo-300 hover:bg-indigo-50/60 active:bg-indigo-50 disabled:opacity-40 md:min-h-0 md:flex-row md:items-center md:justify-between md:px-3 md:py-2"
                           >
                             <span className="min-w-0">
-                              <span className="block truncate text-sm font-medium text-slate-900">{item.name}</span>
-                              <span className="text-xs text-slate-400">
+                              <span className="block truncate text-[13px] font-semibold text-slate-900 md:text-sm">{item.name}</span>
+                              <span className="block text-[11px] text-slate-400 md:text-xs">
                                 {item.current_stock} {item.base_unit} in stock
                                 {item.sku ? ` · ${item.sku}` : ''}
                               </span>
                             </span>
-                            <span className="ml-2 shrink-0 text-sm font-semibold text-indigo-700">
+                            <span className="mt-1 shrink-0 text-sm font-bold text-indigo-700 md:ml-2 md:mt-0">
                               {item.selling_price ? `₹${Number(item.selling_price).toFixed(0)}` : '—'}
                             </span>
                           </button>
@@ -465,20 +495,22 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
                 </>
               ) : (
                 <>
-                  <Input
-                    ref={menuSearchRef}
-                    label=""
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search menu items…"
-                    autoComplete="off"
-                  />
+                  <div className="mt-2">
+                    <Input
+                      ref={menuSearchRef}
+                      label=""
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      placeholder="Search menu items…"
+                      autoComplete="off"
+                    />
+                  </div>
                   {menuLoading ? (
                     <p className="mt-2 text-xs text-slate-400">Loading menu…</p>
                   ) : (
-                    <ul className="mt-3 max-h-72 space-y-1 overflow-y-auto pr-1">
+                    <ul className="mt-2 grid max-h-40 grid-cols-2 gap-2 overflow-y-auto pr-0.5 md:max-h-72 md:grid-cols-1 md:gap-1">
                       {menuItems.length === 0 && !menuLoading ? (
-                        <li className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                        <li className="col-span-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 md:col-span-1">
                           No menu items found for this business unit.
                         </li>
                       ) : (
@@ -487,21 +519,13 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
                             <button
                               type="button"
                               onClick={() => addMenuItemToCart(mi)}
-                              className="flex w-full items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-left transition-colors hover:border-indigo-300 hover:bg-indigo-50/60"
+                              className="flex min-h-[76px] w-full flex-col justify-between rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-left transition-colors hover:border-indigo-300 hover:bg-indigo-50/60 active:bg-indigo-50"
                             >
-                              <span className="min-w-0">
-                                <span className="block truncate text-sm font-medium text-slate-900">
-                                  {mi.name}
-                                </span>
-                                <span className="text-xs text-slate-400">
-                                  {mi.type === 'recipe' ? 'Recipe · ' : 'Product · '}
-                                  {mi.selling_price ? `₹${Number(mi.selling_price).toFixed(0)}` : '—'}
-                                </span>
-                                {mi.ingredient_summary && mi.type === 'recipe' && (
-                                  <span className="block text-xs text-slate-500 mt-0.5">
-                                    {mi.ingredient_summary.map((i) => `${i.qty} ${i.unit} ${i.item_name}`).join(', ')}
-                                  </span>
-                                )}
+                              <span className="block truncate text-[13px] font-semibold text-slate-900">
+                                {mi.name}
+                              </span>
+                              <span className="mt-1 text-sm font-bold text-indigo-700">
+                                {mi.selling_price ? `₹${Number(mi.selling_price).toFixed(0)}` : '—'}
                               </span>
                             </button>
                           </li>
@@ -514,16 +538,18 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
               )}
             </div>
 
-            <div className="flex flex-col gap-3 rounded-lg bg-slate-50 p-4">
-              <h3 className="text-sm font-semibold text-slate-900">Sale summary</h3>
+            <div className="flex flex-col gap-2.5 rounded-xl bg-slate-50 p-3 md:gap-3 md:p-4">
+              <h3 className="text-sm font-semibold text-slate-900">
+                Sale summary {cart.length > 0 && <span className="text-slate-500">({cart.reduce((n, l) => n + l.quantity, 0)})</span>}
+              </h3>
               {cart.length === 0 ? (
-                <p className="text-sm text-slate-500">
+                <p className="text-[13px] text-slate-500">
                   {selectedMenuTab === 'items'
-                    ? 'Click or search items to add them here.'
+                    ? 'Tap items to add them here.'
                     : 'Select a menu item to add it here.'}
                 </p>
               ) : (
-                <ul className="space-y-2 overflow-y-auto" style={{ maxHeight: '14rem' }}>
+                <ul className="max-h-28 space-y-2 overflow-y-auto md:max-h-56" style={{ maxHeight: '6.5rem' }}>
                   {cart.map((line) => {
                     if (line.kind === 'item') {
                       return (
@@ -560,7 +586,7 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
                 </ul>
               )}
 
-              <div className="space-y-2 border-t border-slate-200 pt-3 text-sm">
+              <div className="space-y-1.5 border-t border-slate-200 pt-2 text-sm">
                 <div className="flex justify-between text-slate-600">
                   <span>Subtotal</span>
                   <span className="tabular-nums">₹{subtotal.toFixed(2)}</span>
@@ -572,35 +598,37 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
                   inputMode="decimal"
                   placeholder="Discount ₹ (optional)"
                 />
-                <div className="flex justify-between text-base font-bold text-slate-900">
+                <div className="hidden justify-between text-base font-bold text-slate-900 md:flex">
                   <span>Total</span>
                   <span className="tabular-nums">₹{total.toFixed(2)}</span>
                 </div>
               </div>
 
-              <Input
-                label="Sale date"
-                type="date"
-                value={saleDate}
-                onChange={(e) => setSaleDate(e.target.value)}
-                max={todayISO()}
-              />
-              <Select
-                label=""
-                value={paymentMethod}
-                onChange={(e) => setPaymentMethod(e.target.value as PaymentMethodChoice)}
-                aria-label="Payment method"
-              >
-                {PAYMENT_METHODS.map((m) => (
-                  <option key={m.value} value={m.value}>
-                    Paid via {m.label}
-                  </option>
-                ))}
-                <option value="room_charge">Charge to room</option>
-              </Select>
+              <div className="grid grid-cols-2 gap-2">
+                <Input
+                  label="Sale date"
+                  type="date"
+                  value={saleDate}
+                  onChange={(e) => setSaleDate(e.target.value)}
+                  max={todayISO()}
+                />
+                <Select
+                  label="Payment"
+                  value={paymentMethod}
+                  onChange={(e) => setPaymentMethod(e.target.value as PaymentMethodChoice)}
+                  aria-label="Payment method"
+                >
+                  {PAYMENT_METHODS.map((m) => (
+                    <option key={m.value} value={m.value}>
+                      {m.label}
+                    </option>
+                  ))}
+                  <option value="room_charge">Room</option>
+                </Select>
+              </div>
               {paymentMethod === 'room_charge' && (
                 <Select
-                  label=""
+                  label="Room"
                   value={selectedStayId}
                   onChange={(e) => setSelectedStayId(e.target.value)}
                   aria-label="Room to charge"
@@ -620,18 +648,20 @@ export function SaleFormModal({ open, onClose, onSaved, businessUnits }: SaleFor
               )}
 
               {error && (
-                <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
+                <p ref={errorRef} tabIndex={-1} role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400">
                   {error}
                 </p>
               )}
 
-              <Button type="submit" pending={pending} className="w-full">
-                Complete sale · ₹{total.toFixed(2)}
-              </Button>
+              <div className="hidden md:block">
+                <Button type="submit" pending={pending} className="w-full">
+                  Complete sale · ₹{total.toFixed(2)}
+                </Button>
+              </div>
             </div>
           </div>
         </form>
       )}
-    </Modal>
+    </FormSheet>
   )
 }

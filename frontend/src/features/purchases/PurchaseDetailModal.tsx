@@ -1,14 +1,18 @@
+import { useState } from 'react'
+
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { Badge } from '@/components/ui/Select'
 import { formatPaymentMethod } from '@/types/purchase'
 import { formatDate, formatMoney } from '@/types/inventory'
+import { setPurchasePaymentStatus } from '@/services/purchases'
 import type { Purchase } from '@/types/purchase'
 import type { BusinessUnit, Supplier } from '@/types/master'
 
 interface PurchaseDetailModalProps {
   purchase: Purchase | null
   onClose: () => void
+  onSettled?: () => void
   businessUnits: BusinessUnit[]
   suppliers: Supplier[]
 }
@@ -22,13 +26,32 @@ function paymentStatusTone(status: string): 'healthy' | 'low' | 'out' | 'neutral
 export function PurchaseDetailModal({
   purchase,
   onClose,
+  onSettled,
   businessUnits,
   suppliers,
 }: PurchaseDetailModalProps) {
+  const [settling, setSettling] = useState(false)
+  const [settleError, setSettleError] = useState<string | null>(null)
+
   if (!purchase) return null
 
   const unitName = businessUnits.find((bu) => bu.id === purchase.business_unit_id)?.name ?? '—'
   const supplierName = purchase.supplier_name ?? suppliers.find((s) => s.id === purchase.supplier_id)?.name ?? '—'
+  const hasGst = purchase.items.some((l) => Number(l.gst_percent ?? 0) > 0) || Number(purchase.gst_amount ?? 0) > 0
+
+  async function handleSettle() {
+    setSettling(true)
+    setSettleError(null)
+    try {
+      await setPurchasePaymentStatus(purchase!.id, 'paid')
+      onSettled?.()
+      onClose()
+    } catch (err) {
+      setSettleError(err instanceof Error ? err.message : 'Could not update payment status.')
+    } finally {
+      setSettling(false)
+    }
+  }
 
   return (
     <Modal open title={`Purchase ${purchase.purchase_number}`} onClose={onClose} wide>
@@ -49,6 +72,12 @@ export function PurchaseDetailModal({
             }
           />
           <Detail label="Total amount" value={formatMoney(purchase.total_amount)} />
+          {hasGst && (
+            <>
+              <Detail label="Subtotal" value={formatMoney(purchase.subtotal_amount ?? purchase.total_amount)} />
+              <Detail label="GST" value={formatMoney(purchase.gst_amount ?? '0.00')} />
+            </>
+          )}
           {purchase.notes && (
             <div className="col-span-2 sm:col-span-4">
               <Detail label="Notes" value={purchase.notes} />
@@ -58,7 +87,41 @@ export function PurchaseDetailModal({
 
         <div>
           <h3 className="mb-2 text-sm font-semibold text-slate-900">Items ({purchase.items.length})</h3>
-          <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+          {/* Mobile: stacked line cards (no horizontal scrolling) */}
+          <ul className="space-y-2 md:hidden">
+            {purchase.items.map((line, index) => (
+              <li key={index} className="rounded-xl border border-slate-200 bg-white p-3">
+                <span className="flex items-start justify-between gap-2">
+                  <span className="min-w-0 text-sm font-semibold text-slate-900">{line.item_name}</span>
+                  <span className="shrink-0 text-sm font-bold tabular-nums text-slate-900">
+                    {formatMoney(line.line_total)}
+                  </span>
+                </span>
+                <span className="mt-1 block text-xs tabular-nums text-slate-500">
+                  {line.quantity} {line.unit} × {formatMoney(line.unit_cost)}
+                  {Number(line.gst_percent ?? 0) > 0 && ` + ${Number(line.gst_percent)}% GST`}
+                </span>
+              </li>
+            ))}
+            {hasGst && (
+              <li className="space-y-1 rounded-xl bg-slate-50 px-3 py-2.5 text-sm">
+                <span className="flex justify-between text-slate-600">
+                  <span>Subtotal</span>
+                  <span className="tabular-nums">{formatMoney(purchase.subtotal_amount ?? purchase.total_amount)}</span>
+                </span>
+                <span className="flex justify-between text-slate-600">
+                  <span>GST</span>
+                  <span className="tabular-nums">{formatMoney(purchase.gst_amount ?? '0.00')}</span>
+                </span>
+                <span className="flex justify-between border-t border-slate-200 pt-1 font-bold text-slate-900">
+                  <span>Total</span>
+                  <span className="tabular-nums">{formatMoney(purchase.total_amount)}</span>
+                </span>
+              </li>
+            )}
+          </ul>
+          {/* Desktop: full table */}
+          <div className="hidden overflow-x-auto rounded-lg border border-slate-200 bg-white md:block">
             <table className="w-full min-w-[720px] text-left text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-400">
@@ -66,6 +129,7 @@ export function PurchaseDetailModal({
                   <th className="px-4 py-3 text-right font-medium">Qty</th>
                   <th className="px-4 py-3 text-right font-medium">Unit</th>
                   <th className="px-4 py-3 text-right font-medium">Unit cost</th>
+                  {hasGst && <th className="px-4 py-3 text-right font-medium">GST %</th>}
                   <th className="px-4 py-3 text-right font-medium">Standard price</th>
                   <th className="px-4 py-3 text-right font-medium">Line total</th>
                 </tr>
@@ -83,6 +147,11 @@ export function PurchaseDetailModal({
                       <td className="px-4 py-3 text-right text-slate-700">{line.quantity}</td>
                       <td className="px-4 py-3 text-right text-slate-500">{line.unit}</td>
                       <td className="px-4 py-3 text-right text-slate-700">{formatMoney(line.unit_cost)}</td>
+                      {hasGst && (
+                        <td className="px-4 py-3 text-right text-slate-700">
+                          {Number(line.gst_percent ?? 0) ? `${Number(line.gst_percent)}%` : '—'}
+                        </td>
+                      )}
                       <td className="px-4 py-3 text-right">
                         {stdPrice ? formatMoney(stdPrice) : '—'}
                         {stdPrice && (
@@ -99,8 +168,28 @@ export function PurchaseDetailModal({
                 })}
               </tbody>
               <tfoot>
+                {hasGst && (
+                  <>
+                    <tr className="border-t border-slate-200 bg-slate-50">
+                      <td className="px-4 py-2 text-slate-700" colSpan={hasGst ? 6 : 5}>
+                        Subtotal
+                      </td>
+                      <td className="px-4 py-2 text-right font-semibold text-slate-900">
+                        {formatMoney(purchase.subtotal_amount ?? purchase.total_amount)}
+                      </td>
+                    </tr>
+                    <tr className="bg-slate-50">
+                      <td className="px-4 py-2 text-slate-700" colSpan={hasGst ? 6 : 5}>
+                        GST
+                      </td>
+                      <td className="px-4 py-2 text-right font-semibold text-slate-900">
+                        {formatMoney(purchase.gst_amount ?? '0.00')}
+                      </td>
+                    </tr>
+                  </>
+                )}
                 <tr className="border-t-2 border-slate-200 bg-slate-50">
-                  <td className="px-4 py-3 font-semibold text-slate-900" colSpan={5}>
+                  <td className="px-4 py-3 font-semibold text-slate-900" colSpan={hasGst ? 6 : 5}>
                     Total
                   </td>
                   <td className="px-4 py-3 text-right font-bold text-slate-900">
@@ -112,10 +201,21 @@ export function PurchaseDetailModal({
           </div>
         </div>
 
+        {settleError && (
+          <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+            {settleError}
+          </p>
+        )}
+
         <div className="flex justify-end gap-2 pt-4 border-t border-slate-200">
           <Button variant="secondary" onClick={onClose}>
             Close
           </Button>
+          {purchase.payment_status === 'pending' && (
+            <Button onClick={handleSettle} pending={settling}>
+              Mark paid
+            </Button>
+          )}
         </div>
       </div>
     </Modal>

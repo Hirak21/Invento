@@ -1,15 +1,24 @@
-export const EXPENSE_CATEGORIES = [
+export interface ExpenseCategoryInfo {
+  value: string
+  label: string
+  builtIn?: boolean
+}
+
+/** Built-in fallback until the server category list loads. */
+export const EXPENSE_CATEGORIES: readonly ExpenseCategoryInfo[] = [
   { value: 'utilities', label: 'Utilities' },
   { value: 'transport', label: 'Transport' },
   { value: 'maintenance', label: 'Maintenance' },
   { value: 'cleaning', label: 'Cleaning' },
   { value: 'packaging', label: 'Packaging' },
   { value: 'supplies', label: 'Supplies' },
+  { value: 'staff_salary', label: 'Staff Salary' },
   { value: 'rent', label: 'Rent' },
   { value: 'other', label: 'Other' },
-] as const
+]
 
-export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number]['value']
+/** Category slugs are open-ended (built-ins + custom from Settings). */
+export type ExpenseCategory = string
 
 export const PAYMENT_METHODS = [
   { value: 'cash', label: 'Cash' },
@@ -43,6 +52,6 @@ export interface ExpenseListResponse {
   total_amount: string
 }
 
-export function formatCategory(category: string): string {
-  return EXPENSE_CATEGORIES.find((c) => c.value === category)?.label ?? category
+export function formatCategory(category: string, categories: readonly ExpenseCategoryInfo[] = EXPENSE_CATEGORIES): string {
+  return categories.find((c) => c.value === category)?.label ?? category.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase())
 }

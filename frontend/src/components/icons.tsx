@@ -22,8 +22,15 @@ export function BuildingOfficeIcon(props: IconProps) {
   return base(props, <path strokeLinecap="round" strokeLinejoin="round" d="M4 21V5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v16m0 0h5a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-5m-9 10h5M8 7h2m-2 4h2m-2 4h2m4-8h2m-2 4h2m-2 4h2" />)
 }
 
-export function CubeTransparentIcon(props: IconProps) {
-  return base(props, <path strokeLinecap="round" strokeLinejoin="round" d="M12 3 4 7v10l8 4 8-4V7l-8-4Zm0 0v8m0 0L4 7m8 8 8-8" />)
+export function StockIcon(props: IconProps) {
+  return base(
+    props,
+    <>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="m3.3 7 8.7 5 8.7-5" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 22V12" />
+    </>,
+  )
 }
 
 export function EllipsisHorizontalIcon(props: IconProps) {

@@ -8,6 +8,9 @@ export interface PurchaseLine {
   unit: string
   unit_cost: string
   standard_purchase_price?: string | null
+  gst_percent?: number
+  line_subtotal?: string | null
+  gst_amount?: string | null
   line_total: string
 }
 
@@ -18,6 +21,8 @@ export interface Purchase {
   supplier_id: string | null
   supplier_name: string | null
   items: PurchaseLine[]
+  subtotal_amount?: string | null
+  gst_amount?: string | null
   total_amount: string
   payment_method: PaymentMethod
   payment_status: PaymentStatus

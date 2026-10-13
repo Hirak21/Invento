@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { StatusBadge } from '@/components/ui/Select'
 import { SaleFormModal } from '@/features/sales/SaleFormModal'
+import { CheckInSheet } from '@/features/rooms/CheckInSheet'
 import { ReceiptModal } from '@/features/billing/ReceiptModal'
 import { RestaurantOrderSheet } from '@/features/restaurant/RestaurantOrderSheet'
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
@@ -16,9 +17,8 @@ import type { Sale } from '@/types/sale'
 import {
   CartIcon,
   ClipboardListIcon,
-  CubeTransparentIcon,
+  StockIcon,
   PlusIcon,
-  BanknotesIcon,
   ReceiptIcon,
 } from '@/components/icons'
 
@@ -61,6 +61,7 @@ export function DashboardPage() {
   // True while auto-retrying a network blip (e.g. free-tier server waking up).
   const [waking, setWaking] = useState(false)
   const [saleModalOpen, setSaleModalOpen] = useState(false)
+  const [checkInOpen, setCheckInOpen] = useState(false)
   const [orderSheetOpen, setOrderSheetOpen] = useState(false)
   const [receiptOpen, setReceiptOpen] = useState(false)
 
@@ -159,12 +160,21 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-5">
-      {/* Context header — no period tabs, no finance-first copy */}
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">
-          {greeting()}
-        </h1>
-        <p className="mt-0.5 text-sm font-medium text-slate-600">{todayLabel()}</p>
+      {/* Context header — greeting left, New Guest check-in right */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-xl font-bold text-slate-900 md:text-2xl">
+            {greeting()}
+          </h1>
+          <p className="mt-0.5 text-sm font-medium text-slate-600">{todayLabel()}</p>
+        </div>
+        <Button
+          onClick={() => setCheckInOpen(true)}
+          leftIcon={<PlusIcon className="h-5 w-5" />}
+          className="shrink-0 whitespace-nowrap"
+        >
+          New Guest
+        </Button>
       </div>
 
       {invalidStoredUnit && (
@@ -263,7 +273,7 @@ export function DashboardPage() {
               className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-colors active:bg-slate-50 min-h-[96px]"
             >
               <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">
-                <CubeTransparentIcon className="h-4 w-4" /> Low stock
+                <StockIcon className="h-4 w-4" /> Low stock
               </span>
               <span className={`mt-1 block text-2xl font-bold tabular-nums ${lowStock.length ? 'text-amber-700' : 'text-slate-900'}`}>
                 {lowStock.length}
@@ -285,16 +295,16 @@ export function DashboardPage() {
           Quick actions
         </h2>
         <div className="grid grid-cols-2 gap-3">
-          <Button size="lg" fullWidth onClick={() => setSaleModalOpen(true)} leftIcon={<PlusIcon className="h-5 w-5" />} className="min-w-0">
+          <Button size="lg" fullWidth onClick={() => setSaleModalOpen(true)} leftIcon={<PlusIcon className="h-5 w-5" />} className="min-w-0 whitespace-nowrap">
             <span className="truncate">New sale</span>
           </Button>
-          <Button size="lg" variant="secondary" fullWidth onClick={() => navigate('/purchases?new=1')} leftIcon={<CartIcon className="h-5 w-5" />} className="min-w-0">
-            <span className="truncate">+ Purchase</span>
+          <Button size="lg" variant="secondary" fullWidth onClick={() => navigate('/purchases?new=1')} leftIcon={<PlusIcon className="h-5 w-5" />} className="min-w-0 whitespace-nowrap">
+            <span className="truncate">New purchase</span>
           </Button>
-          <Button size="lg" variant="secondary" fullWidth onClick={() => navigate('/expenses?new=1')} leftIcon={<BanknotesIcon className="h-5 w-5" />} className="min-w-0">
-            <span className="truncate">+ Expense</span>
+          <Button size="lg" variant="secondary" fullWidth onClick={() => navigate('/expenses?new=1')} leftIcon={<PlusIcon className="h-5 w-5" />} className="min-w-0 whitespace-nowrap">
+            <span className="truncate">New expense</span>
           </Button>
-          <Button size="lg" variant="secondary" fullWidth onClick={() => setOrderSheetOpen(true)} leftIcon={<ClipboardListIcon className="h-5 w-5" />} className="min-w-0">
+          <Button size="lg" variant="secondary" fullWidth onClick={() => setOrderSheetOpen(true)} leftIcon={<ClipboardListIcon className="h-5 w-5" />} className="min-w-0 whitespace-nowrap">
             <span className="truncate">Restaurant order</span>
           </Button>
           <Button
@@ -323,7 +333,7 @@ export function DashboardPage() {
           </div>
         ) : attentionCount === 0 ? (
           <Card>
-            <p className="text-center text-sm font-semibold text-slate-900">All clear 🎉</p>
+            <p className="text-center text-sm font-semibold text-slate-900">All clear</p>
             <p className="mt-0.5 text-center text-xs text-slate-500">No pending orders, no stock-outs.</p>
           </Card>
         ) : (
@@ -406,6 +416,11 @@ export function DashboardPage() {
           void load()
         }}
         businessUnits={units}
+      />
+      <CheckInSheet
+        open={checkInOpen}
+        onClose={() => setCheckInOpen(false)}
+        onCheckedIn={() => void load()}
       />
       <ReceiptModal
         open={receiptOpen}

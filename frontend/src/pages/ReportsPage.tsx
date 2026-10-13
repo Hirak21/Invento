@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
+import { PageHeader } from '@/components/ui/PageHeader'
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
 import { apiDownload, apiFetch } from '@/services/api'
 import { cn } from '@/utils/cn'
@@ -55,7 +56,8 @@ export function ReportsPage() {
   const [period, setPeriod] = useState<Period>('month')
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
-  const [downloading, setDownloading] = useState(false)
+  const [downloadingExcel, setDownloadingExcel] = useState(false)
+  const [downloadingPdf, setDownloadingPdf] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [summary, setSummary] = useState<Summary | null>(null)
   const [loadingSummary, setLoadingSummary] = useState(false)
@@ -90,34 +92,65 @@ export function ReportsPage() {
     }
   }, [period, customFrom, customTo, selectedBuId])
 
-  async function download() {
+  function buildParams(): URLSearchParams {
+    const params = new URLSearchParams({ period, tz_offset_minutes: String(tzOffsetMinutes()) })
+    if (selectedBuId) params.set('business_unit_id', selectedBuId)
+    if (period === 'custom') {
+      params.set('from', customFrom)
+      params.set('to', customTo)
+    }
+    return params
+  }
+
+  function saveBlob(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  }
+
+  function reportFilename(ext: 'xlsx' | 'pdf'): string {
+    return `invento-report-${period === 'custom' ? `${customFrom}_${customTo}` : period}.${ext}`
+  }
+
+  async function downloadExcel() {
     setError(null)
     if (period === 'custom' && (!customFrom || !customTo)) {
       setError('Pick both dates for a custom range.')
       return
     }
-    setDownloading(true)
+    setDownloadingExcel(true)
     try {
-      const params = new URLSearchParams({ period, tz_offset_minutes: String(tzOffsetMinutes()) })
-      if (selectedBuId) params.set('business_unit_id', selectedBuId)
-      if (period === 'custom') {
-        params.set('from', customFrom)
-        params.set('to', customTo)
-      }
       // Binary download: fetch with auth header, then hand the blob to the browser.
-      const blob = await apiDownload(`/reports/export?${params.toString()}`)
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `invento-report-${period === 'custom' ? `${customFrom}_${customTo}` : period}.xlsx`
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-      URL.revokeObjectURL(url)
+      const blob = await apiDownload(`/reports/export?${buildParams().toString()}`)
+      saveBlob(blob, reportFilename('xlsx'))
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not download the report.')
+      setError(err instanceof Error ? err.message : 'Could not download the Excel report.')
     } finally {
-      setDownloading(false)
+      setDownloadingExcel(false)
+    }
+  }
+
+  async function downloadPdf() {
+    setError(null)
+    if (period === 'custom' && (!customFrom || !customTo)) {
+      setError('Pick both dates for a custom range.')
+      return
+    }
+    setDownloadingPdf(true)
+    try {
+      // Server-rendered PDF mirror of the Excel workbook (landscape A4,
+      // repeating headers, rows kept together so pages never break mid-row).
+      const blob = await apiDownload(`/reports/export-pdf?${buildParams().toString()}`)
+      saveBlob(blob, reportFilename('pdf'))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not download the PDF report.')
+    } finally {
+      setDownloadingPdf(false)
     }
   }
 
@@ -125,13 +158,10 @@ export function ReportsPage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">Reports</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Sales, purchases, expenses and stock &amp; wastage for the chosen period, plus an executive summary with
-          live formulas. Wastage is shown as a separate non-cash memo (stock was already paid at purchase).
-        </p>
-      </div>
+      <PageHeader
+        title="Reports"
+        description="Sales, purchases, expenses and stock & wastage for the chosen period, plus an executive summary with live formulas."
+      />
 
       <Card>
         <div className="space-y-4">
@@ -195,7 +225,7 @@ export function ReportsPage() {
 
               {summary && summary.items.length > 0 ? (
                 <div className="overflow-x-auto rounded-lg border border-slate-200">
-                  <table className="w-full min-w-[480px] text-left text-sm">
+                  <table className="w-full text-left text-sm">
                     <thead>
                       <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-400">
                         <th className="px-3 py-2 font-medium">Item / recipe</th>
@@ -237,9 +267,18 @@ export function ReportsPage() {
             </p>
           )}
 
-          <Button pending={downloading} onClick={() => void download()}>
-            Download Excel report
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button pending={downloadingExcel} onClick={() => void downloadExcel()}>
+              Download Excel
+            </Button>
+            <Button variant="secondary" pending={downloadingPdf} onClick={() => void downloadPdf()}>
+              Download PDF
+            </Button>
+          </div>
+          <p className="text-xs text-slate-500">
+            The PDF mirrors the Excel layout (same sections and columns, landscape A4 with repeating
+            headers) so pages stay aligned and rows never break across pages.
+          </p>
         </div>
       </Card>
     </div>

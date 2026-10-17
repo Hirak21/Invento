@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import { cn } from '@/utils/cn'
 import { PageHeader } from '@/components/ui/PageHeader'
+import { AccountPanel } from '@/features/settings/AccountPanel'
 import { BusinessUnitsPanel } from '@/features/settings/BusinessUnitsPanel'
 import { BusinessPanel } from '@/features/settings/BusinessPanel'
 import { CategoriesPanel } from '@/features/settings/CategoriesPanel'
@@ -10,6 +11,7 @@ import { SuppliersPanel } from '@/features/settings/SuppliersPanel'
 
 const TABS = [
   { id: 'business', label: 'Business' },
+  { id: 'account', label: 'Account' },
   { id: 'units', label: 'Business Units' },
   { id: 'categories', label: 'Categories' },
   { id: 'expense-categories', label: 'Expense Categories' },
@@ -48,6 +50,7 @@ export function SettingsPage() {
 
       <section className="rounded-lg border border-slate-200 bg-white p-5">
         {tab === 'business' && <BusinessPanel />}
+        {tab === 'account' && <AccountPanel />}
         {tab === 'units' && <BusinessUnitsPanel />}
         {tab === 'categories' && <CategoriesPanel />}
         {tab === 'expense-categories' && <ExpenseCategoriesPanel />}

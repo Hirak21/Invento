@@ -1,11 +1,19 @@
+from typing import Any
+
 from fastapi import APIRouter
 
 from app.core.security import create_access_token, hash_password, verify_password
-from app.models.auth import BootstrapOwnerRequest, BootstrapStatus, LoginRequest, TokenResponse
+from app.models.auth import (
+    BootstrapOwnerRequest,
+    BootstrapStatus,
+    ChangeCredentialsRequest,
+    LoginRequest,
+    TokenResponse,
+)
 from app.models.user import UserRole, UserOut, utc_now, user_out_from_doc
 from app.routers.deps import CurrentUser, DBDep
 from app.utils.audit import log_audit
-from app.utils.errors import BusinessRuleError, ConflictError, UnauthorizedError
+from app.utils.errors import BusinessRuleError, ConflictError, ForbiddenError, UnauthorizedError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -63,3 +71,50 @@ async def login(payload: LoginRequest, db: DBDep) -> TokenResponse:
 @router.get("/me", response_model=UserOut)
 async def me(user: CurrentUser) -> UserOut:
     return user_out_from_doc(user)
+
+
+@router.patch("/me", response_model=UserOut)
+async def change_credentials(
+    payload: ChangeCredentialsRequest, db: DBDep, user: CurrentUser
+) -> UserOut:
+    """Change your own username and/or password (Settings → Account).
+
+    Re-authenticates with the current password. A wrong current password
+    returns 403 (not 401) so the client does not treat it as an expired
+    session and log the user out.
+    """
+    if payload.new_username is None and payload.new_password is None:
+        raise BusinessRuleError("Provide a new username or a new password.")
+    if not verify_password(payload.current_password, user.get("password_hash", "")):
+        raise ForbiddenError("Current password is incorrect.")
+
+    updates: dict[str, Any] = {}
+    changed: list[str] = []
+    if payload.new_username is not None:
+        username = payload.new_username.strip().lower()
+        existing = await db.users.find_one({"username": username})
+        if existing is not None and str(existing["_id"]) != str(user["_id"]):
+            raise ConflictError("That username is already taken.")
+        if username != user["username"]:
+            updates["username"] = username
+            changed.append("username")
+    if payload.new_password is not None:
+        updates["password_hash"] = hash_password(payload.new_password)
+        changed.append("password")
+
+    if not updates:
+        raise BusinessRuleError("Nothing to change.")
+
+    await db.users.update_one({"_id": user["_id"]}, {"$set": updates})
+    updated = await db.users.find_one({"_id": user["_id"]})
+    assert updated is not None
+    await log_audit(
+        db,
+        actor_id=str(user["_id"]),
+        actor_username=updated["username"],
+        action="update",
+        entity_type="user",
+        entity_id=str(user["_id"]),
+        notes=f"Changed {' & '.join(changed)} (self-service)",
+    )
+    return user_out_from_doc(updated)

@@ -45,3 +45,13 @@ export async function bootstrapOwner(username: string, password: string): Promis
 export async function fetchCurrentUser(): Promise<User> {
   return apiFetch<User>('/auth/me')
 }
+
+export interface ChangeCredentialsInput {
+  current_password: string
+  new_username?: string
+  new_password?: string
+}
+
+export async function changeCredentials(input: ChangeCredentialsInput): Promise<User> {
+  return apiFetch<User>('/auth/me', { method: 'PATCH', body: input })
+}

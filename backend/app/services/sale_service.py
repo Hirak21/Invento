@@ -7,12 +7,12 @@ from motor.motor_asyncio import AsyncIOMotorClientSession, AsyncIOMotorDatabase
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from app.models.sale import SaleCreate, SalePaymentMethod, sale_out_from_doc
+from app.models.sale import SaleCreate, SaleOut, SalePaymentMethod, sale_out_from_doc
 from app.models.enums import MovementType
 from app.services.ledger import is_oid, oid, record_movement
 from app.services.recipe_service import get_recipe as get_recipe_full
 from app.utils.audit import log_audit
-from app.utils.errors import BusinessRuleError, ConflictError, NotFoundError
+from app.utils.errors import BusinessRuleError, ConflictError, ForbiddenError, NotFoundError
 from app.utils.money import money_to_str, parse_money
 from app.utils.units import decimal_to_mongo, to_decimal_number
 
@@ -39,6 +39,7 @@ async def create_sale(
     db: AsyncIOMotorDatabase,
     payload: SaleCreate,
     *,
+    actor_role: str,
     actor_id: str,
     actor_username: str,
 ) -> tuple[dict[str, Any], bool]:
@@ -54,6 +55,12 @@ async def create_sale(
     so later menu edits never change past bills). Non-recipe lines sell
     inventory items directly. Mixing both kinds in one sale is supported.
     """
+    # Idempotency pre-check BEFORE validation: a retried submission sees
+    # post-sale stock and must return the original doc, not fail on rules.
+    existing = await db.sales.find_one({"idempotency_key": payload.idempotency_key})
+    if existing is not None:
+        return existing, True
+
     if not is_oid(payload.business_unit_id):
         raise BusinessRuleError("Business unit not found.")
     unit = await db.business_units.find_one({"_id": oid(payload.business_unit_id)})
@@ -181,6 +188,26 @@ async def create_sale(
     discount = parse_money(payload.discount) if payload.discount else parse_money("0.00")
     if discount > subtotal:
         raise BusinessRuleError("Discount cannot exceed the sale subtotal.")
+    # Giveaway policy: stock may only leave for free with owner approval.
+    # A staff sale must charge something on every line and must not discount
+    # the full subtotal away (owner can still comp orders deliberately).
+    if actor_role != "owner":
+        if subtotal > 0 and discount >= subtotal:
+            raise ForbiddenError("Discounting the full amount requires owner approval.")
+        zero_lines = [
+            entry.get("item_name") or entry.get("recipe_name") or "line"
+            for entry in sale_demand.values()
+            if parse_money(entry["unit_price"]) == Decimal("0.00")
+        ]
+        zero_lines += [
+            ref.get("_recipe_name") or "line"
+            for ref in recipe_refs.values()
+            if parse_money(ref["unit_price"]) == Decimal("0.00")
+        ]
+        if zero_lines:
+            raise ForbiddenError(
+                "Zero-price lines require owner approval: " + ", ".join(sorted(set(zero_lines)))
+            )
     total_amount = money_to_str(subtotal - discount)
 
     sold_at = _parse_sale_date(payload.date)
@@ -412,7 +439,7 @@ async def create_sale(
     return {**doc, "_id": result.inserted_id}, False
 
 
-async def get_sale(db: AsyncIOMotorDatabase, sale_id: str) -> dict[str, Any]:
+async def get_sale(db: AsyncIOMotorDatabase, sale_id: str) -> SaleOut:
     if not is_oid(sale_id):
         raise NotFoundError("Sale not found.")
     doc = await db.sales.find_one({"_id": oid(sale_id)})

@@ -394,7 +394,9 @@ async def test_sale_recipe_wrong_bu_rejected(client, owner_headers):
 # ---------- menu items ----------
 
 
-async def test_menu_items_shows_recipes_and_products(client, owner_headers):
+async def test_menu_items_shows_recipes_only(client, owner_headers):
+    """Menu = sellable recipes only. Raw items and shop products never
+    appear, even with a selling_price; a recipe needs a price AND a BOM."""
     bu_id, cat_id = await setup_refs(client, owner_headers)
     flour = await make_item(
         client, owner_headers, bu_id, cat_id, name="Rice Flour", sku="RF-003", opening=5000, selling_price="50.00"
@@ -402,6 +404,7 @@ async def test_menu_items_shows_recipes_and_products(client, owner_headers):
     dal = await make_item(
         client, owner_headers, bu_id, cat_id, name="Urad Dal", sku="UD-002", opening=2000, selling_price="80.00"
     )
+    # Priced recipe WITH a BOM -> sellable -> on the menu.
     recipe = await client.post(
         "/api/recipes",
         json={
@@ -412,24 +415,40 @@ async def test_menu_items_shows_recipes_and_products(client, owner_headers):
         headers=owner_headers,
     )
     rid = recipe.json()["recipe"]["id"]
-    # Set selling_price on recipe (not a field in RecipeCreate, so set via update)
-    await client.patch(
+    for item_id, qty in ((flour["id"], 300), (dal["id"], 100)):
+        added = await client.post(
+            f"/api/recipes/{rid}/ingredients",
+            json={"item_id": item_id, "quantity": qty},
+            headers=owner_headers,
+        )
+        assert added.status_code in (200, 201), added.text
+    patched = await client.patch(
         f"/api/recipes/{rid}",
-        json={"selling_price": "120.00"},  # nope - this field doesn't exist
+        json={"selling_price": "120.00"},
         headers=owner_headers,
     )
-    # Actually selling_price isn't a recipe field in our model. Recipes appear on menu only if they have selling_price.
-    # The brief says recipes with selling_price. We need to support selling_price on recipes.
-    # Actually re-reading the brief: list_menu_items returns recipes that have selling_price set.
-    # But RecipeCreate doesn't have selling_price. Let me check... the brief doesn't explicitly say recipe needs selling_price.
-    # Let me just use shop products for this test since recipe model doesn't have selling_price.
-    
+    assert patched.status_code == 200, patched.text
+
+    # Priced recipe WITHOUT a BOM -> not sellable -> excluded.
+    ghost = await client.post(
+        "/api/recipes",
+        json={"name": "Ghost Dish", "business_unit_id": bu_id},
+        headers=owner_headers,
+    )
+    ghost_rid = ghost.json()["recipe"]["id"]
+    await client.patch(
+        f"/api/recipes/{ghost_rid}",
+        json={"selling_price": "90.00"},
+        headers=owner_headers,
+    )
+
     menu = await client.get(f"/api/menu-items?business_unit_id={bu_id}", headers=owner_headers)
     assert menu.status_code == 200
-    items = menu.json()
-    names = {it["name"] for it in items}
-    assert "Rice Flour" in names
-    assert "Urad Dal" in names
+    names = {it["name"] for it in menu.json()}
+    assert "Dosa Batter" in names
+    assert "Rice Flour" not in names
+    assert "Urad Dal" not in names
+    assert "Ghost Dish" not in names
 
 
 # ---------- staff permissions ----------

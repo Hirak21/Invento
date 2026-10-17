@@ -40,16 +40,13 @@ async def record_movement(
 ) -> str:
     """Insert an inventory movement row. Every stock change must go through this.
 
-    ``quantity`` is an int for whole-unit flows (purchases, direct sales);
-    fractional canonical quantities (recipe ingredients, e.g. 0.500 kg) arrive
-    as Decimal and are stored as exact decimal strings — readers stringify
-    either form, so both display identically.
+    ``quantity`` is normalized to a plain decimal string with no trailing
+    zeros: whole-unit flows store ``"25"`` (int or Decimal input) and
+    fractional flows store ``"0.5"`` / ``"2.75"`` — the same canonical form
+    for every writer, so the movements ledger renders uniformly.
     """
-    if isinstance(quantity, int):
-        stored: int | str = quantity
-    else:
-        dec = quantity if isinstance(quantity, Decimal) else Decimal(str(quantity))
-        stored = str(dec.quantize(Decimal("0.001")))
+    dec = quantity if isinstance(quantity, Decimal) else Decimal(str(quantity))
+    stored: str = format(dec.quantize(Decimal("0.001")).normalize(), "f")
     doc = {
         "item_id": str(item_doc["_id"]),
         "business_unit_id": item_doc["business_unit_id"],

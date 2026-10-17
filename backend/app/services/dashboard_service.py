@@ -132,7 +132,12 @@ async def build_summary(
             base["business_unit_id"] = business_unit_id
         return base
 
-    sales_match = scoped({"sold_at": {"$gte": range_start, "$lt": range_end}})
+    # Cancelled orders are excluded everywhere (stock was restored), so the
+    # dashboard, reports and sales summary all tell the same revenue story.
+    sales_match = scoped({
+        "sold_at": {"$gte": range_start, "$lt": range_end},
+        "order_status": {"$ne": "CANCELLED"},
+    })
     purchase_match = scoped({"purchased_at": {"$gte": range_start, "$lt": range_end}})
     expense_match = scoped({"spent_at": {"$gte": range_start, "$lt": range_end}})
 
@@ -145,7 +150,7 @@ async def build_summary(
         sum_field("sales", sales_match, "total_amount"),
         sum_field("purchases", purchase_match, "total_amount"),
         sum_field("expenses", expense_match, "amount"),
-        sum_field("wastage", {"wasted_at": {"$gte": range_start, "$lt": range_end}}, "estimated_value"),
+        sum_field("wastage", scoped({"wasted_at": {"$gte": range_start, "$lt": range_end}}), "estimated_value"),
     )
 
     sale_count = await db.sales.count_documents(sales_match)
@@ -219,22 +224,24 @@ async def build_summary(
             }
         )
 
-    # Recent activity across the three transaction types.
+    # Recent activity across the three transaction types (period + BU scoped,
+    # same as the totals above — it previously leaked other units/all-time).
     recent_sales = (
-        await db.sales.find({}, {"sale_number": 1, "total_amount": 1, "sold_at": 1})
+        await db.sales.find(sales_match, {"sale_number": 1, "total_amount": 1, "sold_at": 1})
         .sort("sold_at", DESCENDING).limit(5).to_list(5)
     )
     recent_purchases = (
-        await db.purchases.find({}, {"purchase_number": 1, "total_amount": 1, "purchased_at": 1})
+        await db.purchases.find(purchase_match, {"purchase_number": 1, "total_amount": 1, "purchased_at": 1})
         .sort("purchased_at", DESCENDING).limit(5).to_list(5)
     )
     recent_expenses = (
-        await db.expenses.find({}, {"expense_number": 1, "amount": 1, "description": 1, "spent_at": 1})
+        await db.expenses.find(expense_match, {"expense_number": 1, "amount": 1, "description": 1, "spent_at": 1})
         .sort("spent_at", DESCENDING).limit(5).to_list(5)
     )
     recent_wastages = (
         await db.wastage.find(
-            {"wasted_at": {"$gte": range_start, "$lt": range_end}}, {"item_name": 1, "estimated_value": 1, "wasted_at": 1}
+            scoped({"wasted_at": {"$gte": range_start, "$lt": range_end}}),
+            {"item_name": 1, "estimated_value": 1, "wasted_at": 1},
         )
         .sort("wasted_at", DESCENDING).limit(5).to_list(5)
     )

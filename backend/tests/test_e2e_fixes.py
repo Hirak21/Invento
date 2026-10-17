@@ -149,6 +149,25 @@ async def test_orders_modal_sources_populated(client, owner_headers):
         client, owner_headers, bu_id, cat_id, name="Flour", selling_price="45.00",
         item_type="shop_product",
     )
+    # Menu source = a sellable recipe (priced + BOM); shop products stay off.
+    recipe = await client.post(
+        "/api/recipes",
+        json={"name": "House Special", "business_unit_id": bu_id},
+        headers=owner_headers,
+    )
+    rid = recipe.json()["recipe"]["id"]
+    added = await client.post(
+        f"/api/recipes/{rid}/ingredients",
+        json={"item_id": flour["id"], "quantity": 1},
+        headers=owner_headers,
+    )
+    assert added.status_code in (200, 201), added.text
+    priced = await client.patch(
+        f"/api/recipes/{rid}",
+        json={"selling_price": "45.00"},
+        headers=owner_headers,
+    )
+    assert priced.status_code == 200, priced.text
     rooms = await client.get("/api/rooms", headers=owner_headers)
     assert rooms.json()["total"] == 1
     assert rooms.json()["rooms"][0]["status"] == "occupied"
@@ -161,7 +180,9 @@ async def test_orders_modal_sources_populated(client, owner_headers):
         "/api/menu-items", params={"business_unit_id": bu_id}, headers=owner_headers
     )
     assert menu.status_code == 200
-    assert any(m["name"] == flour["name"] for m in menu.json())
+    menu_names = [m["name"] for m in menu.json()]
+    assert "House Special" in menu_names
+    assert flour["name"] not in menu_names
 
 
 # ---------- business settings: first save, update, logo limits ----------

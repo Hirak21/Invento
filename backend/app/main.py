@@ -39,7 +39,15 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title=settings.app_name, lifespan=lifespan)
+    # Don't publish the full API surface in production (/docs, /openapi.json).
+    is_prod = settings.environment == "production"
+    app = FastAPI(
+        title=settings.app_name,
+        lifespan=lifespan,
+        docs_url=None if is_prod else "/docs",
+        redoc_url=None if is_prod else "/redoc",
+        openapi_url=None if is_prod else "/openapi.json",
+    )
 
     # Build the CORS allow-list. We always include the deployed Firebase hosts
     # and local dev so the app works even if the CORS_ORIGINS env var is empty

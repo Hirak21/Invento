@@ -98,7 +98,8 @@ STEP 6 [YOU] — Verify in browser
 ====================================================================
 1. Open https://invento-lite.web.app and HARD-REFRESH (Ctrl+Shift+R).
 2. Login with the owner account created via /api/auth/bootstrap-owner
-   (server-side): username platiodevelopers@gmail.com / password Platio9080.
+   (server-side): credentials are in the team password manager — NEVER
+   write passwords into this file.
    NOTE: the app uses `username` to log in, not a separate email field.
 3. Dashboard loads -> add a sale -> add a purchase -> run a report export (xlsx).
 4. If blank/errors: check Render logs for Mongo connection error (Atlas IP
@@ -116,5 +117,5 @@ GOTCHAS
 - SPA rewrite (source "**" -> /index.html) is required or deep links 404.
 - healthCheckPath /api/health is set in render.yaml and the route exists in code.
 - Never commit .env. MONGO_URI lives only in Render dashboard.
-- firebase-tools login must be done as platiodevelopers@gmail.com (the account
+- firebase-tools login must be done as REMOVED_EMAIL<== (the account
   that owns the invento-lite Firebase project), NOT Hirak21.

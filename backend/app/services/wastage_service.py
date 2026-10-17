@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -15,6 +16,7 @@ from app.models.wastage import (
 from app.services.ledger import is_oid, oid, record_movement
 from app.utils.errors import BusinessRuleError, ConflictError, ForbiddenError, NotFoundError
 from app.utils.money import money_to_str, parse_money
+from app.utils.units import to_decimal_number
 
 
 def _parse_date(raw: str | None) -> datetime:
@@ -38,12 +40,22 @@ async def create_wastage(
     db: AsyncIOMotorDatabase,
     payload: WastageCreate,
     *,
+    actor_role: str,
     actor_id: str,
     actor_username: str,
 ) -> tuple[dict[str, Any], bool]:
     existing = await db.wastage.find_one({"idempotency_key": payload.idempotency_key})
     if existing is not None:
         return existing, True
+
+    # Same visible policy as stock adjustments: staff entries are capped,
+    # owner entries are unlimited. Without this, wastage was a way around
+    # the adjustment limit (staff could discard arbitrary stock in one shot).
+    if actor_role != "owner" and payload.quantity > get_settings().staff_adjustment_limit:
+        raise ForbiddenError(
+            f"Staff may only record up to {get_settings().staff_adjustment_limit} "
+            f"units per wastage entry. Ask an owner for larger discards."
+        )
 
     doc: dict[str, Any] = {
         "business_unit_id": payload.business_unit_id,
@@ -62,11 +74,14 @@ async def create_wastage(
         async with await db.client.start_session() as session:
             async with session.start_transaction():
                 item = await _load_item(db, session, payload.item_id, payload.business_unit_id)
-                available = int(item.get("current_stock", 0))
+                # Decimal128-safe + fractional-accurate: never int() a stock
+                # value (0.5 kg must compare as 0.5, not a TypeError or 0).
+                available = to_decimal_number(item.get("current_stock", 0) or 0)
                 if available < payload.quantity:
+                    shown = int(available) if available == available.to_integral_value() else available
                     raise BusinessRuleError(
                         f"Insufficient stock for '{item['name']}': "
-                        f"have {available} {item['base_unit']}, cannot waste {payload.quantity}."
+                        f"have {shown} {item['base_unit']}, cannot waste {payload.quantity}."
                     )
                 unit_cost = item.get("purchase_price")
                 doc.update(
@@ -130,8 +145,11 @@ async def create_adjustment(
         async with await db.client.start_session() as session:
             async with session.start_transaction():
                 item = await _load_item(db, session, payload.item_id, payload.business_unit_id)
-                previous = int(item.get("current_stock", 0))
-                delta = payload.new_quantity - previous
+                # Exact Decimal previous: int() used to truncate fractional
+                # stock (7.250 -> 7), so the recorded delta/previous never
+                # matched the real stock change and reconciliation broke.
+                previous = to_decimal_number(item.get("current_stock", 0) or 0)
+                delta = Decimal(payload.new_quantity) - previous
                 if delta == 0:
                     raise BusinessRuleError(
                         "New quantity equals current stock — nothing to adjust."
@@ -148,9 +166,9 @@ async def create_adjustment(
                     "business_unit_id": payload.business_unit_id,
                     "item_id": str(item["_id"]),
                     "item_name": item["name"],
-                    "previous_quantity": previous,
+                    "previous_quantity": float(previous),
                     "new_quantity": payload.new_quantity,
-                    "delta": delta,
+                    "delta": float(delta),
                     "unit": item["base_unit"],
                     "reason": payload.reason.value,
                     "notes": payload.notes,
@@ -205,7 +223,9 @@ def build_wastage_query(
         range_filter["$gte"] = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=UTC)
     if date_to:
         end = datetime.strptime(date_to, "%Y-%m-%d").replace(tzinfo=UTC)
-        range_filter["$lte"] = end.replace(hour=23, minute=59, second=59)
+        # Half-open: include the whole to-day (incl. microseconds); the old
+        # $lte 23:59:59 silently dropped writes in the final second.
+        range_filter["$lt"] = end + timedelta(days=1)
     if range_filter:
         query["wasted_at"] = range_filter
     return query
@@ -225,7 +245,7 @@ def build_adjustment_query(
         range_filter["$gte"] = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=UTC)
     if date_to:
         end = datetime.strptime(date_to, "%Y-%m-%d").replace(tzinfo=UTC)
-        range_filter["$lte"] = end.replace(hour=23, minute=59, second=59)
+        range_filter["$lt"] = end + timedelta(days=1)
     if range_filter:
         query["adjusted_at"] = range_filter
     return query

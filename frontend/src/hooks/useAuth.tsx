@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from 'react'
 
 import { clearToken } from '@/services/auth'
+import { UNAUTHORIZED_EVENT } from '@/services/api'
 import { bootstrapOwner as apiBootstrapOwner, fetchCurrentUser, login as apiLogin } from '@/services/auth'
 import type { User } from '@/types/user'
 
@@ -37,8 +38,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
     void restoreSession()
+    // If any API call later gets a 401 (expired token, cross-server token
+    // after a failover), drop the session so RequireAuth redirects to
+    // /login instead of stranding pages in a retry loop with no token.
+    const onUnauthorized = () => setUser(null)
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
     return () => {
       cancelled = true
+      window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
     }
   }, [])
 

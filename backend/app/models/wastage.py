@@ -100,9 +100,10 @@ class AdjustmentOut(BaseModel):
     business_unit_id: str
     item_id: str
     item_name: str
-    previous_quantity: int
+    # Fractional: stock like 7.250 kg is a valid previous/delta value.
+    previous_quantity: float
     new_quantity: int
-    delta: int
+    delta: float
     unit: str
     reason: AdjustmentReason
     notes: str | None

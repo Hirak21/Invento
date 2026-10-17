@@ -27,6 +27,7 @@ async def record_wastage(payload: WastageCreate, db: DBDep, user: CurrentUser) -
     doc, duplicate = await create_wastage(
         db,
         payload,
+        actor_role=user["role"],
         actor_id=str(user["_id"]),
         actor_username=user["username"],
     )

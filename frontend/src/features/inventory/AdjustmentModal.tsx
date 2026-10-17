@@ -22,6 +22,10 @@ export function AdjustmentModal({ item, onClose, onSaved }: AdjustmentModalProps
   const [notes, setNotes] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
+  // Key is minted when the modal opens for an item: retrying a timed-out
+  // submit reuses it (server returns the original adjustment) instead of
+  // applying the correction twice.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID())
 
   useEffect(() => {
     if (!item) return
@@ -29,6 +33,7 @@ export function AdjustmentModal({ item, onClose, onSaved }: AdjustmentModalProps
     setReason('physical_count')
     setNotes('')
     setError(null)
+    setIdempotencyKey(crypto.randomUUID())
   }, [item])
 
   if (!item) return null
@@ -50,7 +55,7 @@ export function AdjustmentModal({ item, onClose, onSaved }: AdjustmentModalProps
         new_quantity: Number(newQuantity),
         reason,
         notes: notes.trim() || null,
-        idempotency_key: crypto.randomUUID(),
+        idempotency_key: idempotencyKey,
       })
       onSaved(record)
       onClose()

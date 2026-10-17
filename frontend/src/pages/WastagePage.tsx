@@ -38,6 +38,9 @@ export function WastagePage() {
   const [notes, setNotes] = useState('')
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [pending, setPending] = useState(false)
+  // One key per attempted record: a retry after a timeout reuses the key so
+  // the server dedupes instead of creating a duplicate wastage entry.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID())
   const errorRef = useRef<HTMLParagraphElement>(null)
 
   // Failed submits move keyboard/screen-reader focus to the message.
@@ -89,8 +92,11 @@ export function WastagePage() {
         reason,
         notes: notes.trim() || null,
         date,
-        idempotency_key: crypto.randomUUID(),
+        idempotency_key: idempotencyKey,
       })
+      // Record created — mint a fresh key for the NEXT entry (a retry of
+      // THIS request must keep the old key).
+      setIdempotencyKey(crypto.randomUUID())
       setSuccessMsg(
         `Wastage recorded: ${record.quantity} ${record.unit} of ${record.item_name} (${formatReason(record.reason)}).`,
       )

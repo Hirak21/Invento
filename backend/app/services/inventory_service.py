@@ -1,3 +1,4 @@
+import re
 from typing import Any
 
 from bson import ObjectId
@@ -229,6 +230,12 @@ async def delete_item(
     if movements_count > 0:
         raise BusinessRuleError("Cannot delete item with stock movements. Deactivate instead.")
 
+    # Recipes reference items by id; readers silently skip missing items, so
+    # deleting here would quietly gut recipe costing and menu availability.
+    recipe_refs = await db.recipe_ingredients.count_documents({"item_id": item_id})
+    if recipe_refs > 0:
+        raise BusinessRuleError("Cannot delete an item used by recipes. Deactivate instead.")
+
     await db.inventory_items.delete_one({"_id": item["_id"]})
     return item
 
@@ -269,9 +276,12 @@ def build_item_query(
     if supplier_id and ObjectId.is_valid(supplier_id):
         query["supplier_id"] = supplier_id
     if search:
+        # Escape user input: "(" or "C++" used to raise a Mongo regex error
+        # (HTTP 500), and metacharacters matched the wrong rows.
+        safe = re.escape(search[:100])
         query["$or"] = [
-            {"name": {"$regex": search, "$options": "i"}},
-            {"sku": {"$regex": search, "$options": "i"}},
+            {"name": {"$regex": safe, "$options": "i"}},
+            {"sku": {"$regex": safe, "$options": "i"}},
         ]
     if status == "out":
         query["current_stock"] = {"$lte": 0}

@@ -191,3 +191,119 @@ async def test_adjustment_duplicate_key_noop(client, owner_headers):
     assert first.status_code == 201
     assert second.json()["id"] == first.json()["id"]
     assert (await get_item(client, owner_headers, item["id"]))["current_stock"] == 15
+
+
+async def test_adjustment_and_wastage_with_decimal128_stock(client, owner_headers):
+    """Regression: exact-decimal $inc writes (sales/purchases) store stock as
+    BSON Decimal128 (e.g. Paneer Decimal128('20.000')). Adjustments and
+    wastage must read it without TypeError."""
+    from bson import ObjectId
+    from bson.decimal128 import Decimal128
+
+    from app.core.config import get_settings
+    from app.db.mongo import get_mongo_client
+
+    bu_id, item = await seed(client, owner_headers, stock=30)
+    # NB: use the app's configured DB name (importing TEST_DB_NAME from
+    # tests.conftest would re-execute the module and yield another uuid).
+    db = get_mongo_client()[get_settings().mongo_db]
+    res = await db.inventory_items.update_one(
+        {"_id": ObjectId(item["id"])}, {"$set": {"current_stock": Decimal128("20.000")}}
+    )
+    assert res.matched_count == 1, f"seed item not found: {item['id']}"
+    check = await db.inventory_items.find_one({"_id": ObjectId(item["id"])})
+    assert str(check["current_stock"]) == "20.000", check["current_stock"]
+
+    adj = await client.post(
+        "/api/stock-adjustments",
+        json=adjustment_payload(bu_id, item["id"], 25, key="dec-adj-01"),
+        headers=owner_headers,
+    )
+    assert adj.status_code == 201, adj.text
+    assert adj.json()["previous_quantity"] == 20
+    assert adj.json()["delta"] == 5
+
+    waste = await client.post(
+        "/api/wastage",
+        json=wastage_payload(bu_id, item["id"], quantity=5, key="dec-waste-01"),
+        headers=owner_headers,
+    )
+    assert waste.status_code == 201, waste.text
+    assert (await get_item(client, owner_headers, item["id"]))["current_stock"] == 20
+
+
+async def test_staff_wastage_limit_enforced(client, owner_headers, staff_headers):
+    """Staff wastage must respect the same visible cap as adjustments —
+    otherwise wastage is a bypass for the +/-10 correction policy."""
+    bu_id, item = await seed(client, owner_headers, stock=30)
+
+    too_big = await client.post(
+        "/api/wastage",
+        json=wastage_payload(bu_id, item["id"], quantity=42, key="staff-waste-big"),
+        headers=staff_headers,
+    )
+    assert too_big.status_code == 403, too_big.text
+    assert (await get_item(client, owner_headers, item["id"]))["current_stock"] == 30
+
+    small = await client.post(
+        "/api/wastage",
+        json=wastage_payload(bu_id, item["id"], quantity=5, key="staff-waste-small"),
+        headers=staff_headers,
+    )
+    assert small.status_code == 201, small.text
+    assert (await get_item(client, owner_headers, item["id"]))["current_stock"] == 25
+
+    # Owner is unlimited.
+    owner_big = await client.post(
+        "/api/wastage",
+        json=wastage_payload(bu_id, item["id"], quantity=25, key="owner-waste-big"),
+        headers=owner_headers,
+    )
+    assert owner_big.status_code == 201, owner_big.text
+
+
+async def test_adjustment_fractional_stock_exact_delta(client, owner_headers):
+    """Regression: fractional stock (7.250 kg) must produce an exact delta —
+    int() truncation used to record delta=3 instead of 2.75 and the ledger
+    diverged from current_stock."""
+    from bson import ObjectId
+    from bson.decimal128 import Decimal128
+
+    from app.core.config import get_settings
+    from app.db.mongo import get_mongo_client
+
+    bu_id, item = await seed(client, owner_headers, stock=30)
+    db = get_mongo_client()[get_settings().mongo_db]
+    await db.inventory_items.update_one(
+        {"_id": ObjectId(item["id"])}, {"$set": {"current_stock": Decimal128("7.250")}}
+    )
+
+    adj = await client.post(
+        "/api/stock-adjustments",
+        json=adjustment_payload(bu_id, item["id"], 10, key="frac-adj-01"),
+        headers=owner_headers,
+    )
+    assert adj.status_code == 201, adj.text
+    body = adj.json()
+    assert body["previous_quantity"] == 7.25
+    assert body["delta"] == 2.75
+
+    updated = await get_item(client, owner_headers, item["id"])
+    assert updated["current_stock"] == 10
+
+    movements = (
+        await client.get(f"/api/inventory/items/{item['id']}/movements", headers=owner_headers)
+    ).json()["movements"]
+    adj_move = next(m for m in movements if m["reference_type"] == "adjustment")
+    assert adj_move["quantity"] == "2.75"
+
+    # Correcting DOWN to a lower integer from fractional stock must also work
+    # (old code rejected 7.250 -> 7 as "nothing to adjust").
+    down = await client.post(
+        "/api/stock-adjustments",
+        json=adjustment_payload(bu_id, item["id"], 7, key="frac-adj-02"),
+        headers=owner_headers,
+    )
+    assert down.status_code == 201, down.text
+    assert down.json()["delta"] == -3
+    assert (await get_item(client, owner_headers, item["id"]))["current_stock"] == 7

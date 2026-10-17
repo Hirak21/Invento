@@ -11,11 +11,24 @@ const FALLBACK_RAW = import.meta.env.VITE_API_FALLBACK_BASE as string | undefine
 const FALLBACK_BASE = FALLBACK_RAW && FALLBACK_RAW.length > 0 ? FALLBACK_RAW : null
 
 /** How long to wait for the primary before trying the standby. */
-const PRIMARY_TIMEOUT_MS = 12000
+const PRIMARY_TIMEOUT_MS = 8000
 /** Standby may be asleep — give it time to cold-start. */
 const FALLBACK_TIMEOUT_MS = 75000
 
 export const TOKEN_KEY = 'invento_token'
+
+/** Fired whenever a 401 invalidates the stored session, so the auth
+ *  context can log out immediately (redirect to /login) instead of
+ *  leaving pages in a dead "retry" loop with no token. */
+export const UNAUTHORIZED_EVENT = 'invento:unauthorized'
+
+function notifyUnauthorized(): void {
+  try {
+    window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT))
+  } catch {
+    // Non-browser env (tests) — no listeners to notify.
+  }
+}
 
 export type ApiMode = 'primary' | 'standby'
 
@@ -52,9 +65,9 @@ export function subscribeApiMode(listener: (mode: ApiMode) => void): () => void 
 }
 
 /**
- * Forget the standby and try the primary again on the next request.
- * Called automatically after a successful primary response; also safe to call
- * from a "Retry main server" button.
+ * Force the next request to consider the primary fresh (clears any standby
+ * stickiness in older cached bundles). Modern bundles try primary first on
+ * every request anyway; this is kept for the "Retry main server" button.
  */
 export function retryPrimary(): void {
   setApiMode('primary')
@@ -144,22 +157,17 @@ async function fetchWithFailover(
   const primaryTimeout = timeoutMs ?? PRIMARY_TIMEOUT_MS
   const fallbackTimeout = timeoutMs ?? FALLBACK_TIMEOUT_MS
 
-  // Order: current mode first so steady-state standby traffic never pays the
-  // primary timeout on every request; recovery happens opportunistically.
-  const attempts: Array<{ base: string; mode: ApiMode; timeout: number }> =
-    apiMode === 'primary'
-      ? [
-          { base: PRIMARY_BASE, mode: 'primary', timeout: primaryTimeout },
-          ...(FALLBACK_BASE
-            ? [{ base: FALLBACK_BASE, mode: 'standby' as ApiMode, timeout: fallbackTimeout }]
-            : []),
-        ]
-      : [
-          ...(FALLBACK_BASE
-            ? [{ base: FALLBACK_BASE, mode: 'standby' as ApiMode, timeout: fallbackTimeout }]
-            : []),
-          { base: PRIMARY_BASE, mode: 'primary', timeout: primaryTimeout },
-        ]
+  // Order: primary FIRST on every request. The standby (Render free tier)
+  // is only woken when the primary truly cannot serve. This keeps Render
+  // separate: a past failover never sticks, and recovery is automatic the
+  // moment the VPS answers again. Cost when the primary is really down is
+  // one PRIMARY_TIMEOUT wait per request before the standby is tried.
+  const attempts: Array<{ base: string; mode: ApiMode; timeout: number }> = [
+    { base: PRIMARY_BASE, mode: 'primary', timeout: primaryTimeout },
+    ...(FALLBACK_BASE
+      ? [{ base: FALLBACK_BASE, mode: 'standby' as ApiMode, timeout: fallbackTimeout }]
+      : []),
+  ]
 
   let firstError: ApiError | null = null
   for (let i = 0; i < attempts.length; i++) {
@@ -181,7 +189,7 @@ async function fetchWithFailover(
       const apiErr =
         err instanceof ApiError ? err : new ApiError(0, 'Cannot reach the server.')
       if (isLast) {
-        if (firstError && apiMode === 'primary' && attempts.length > 1) {
+        if (firstError && attempts.length > 1) {
           // Both backends failed.
           throw new ApiError(
             0,
@@ -269,6 +277,7 @@ export async function apiFetch<T>(path: string, options: ApiRequestOptions = {})
       // Token expired or revoked — clear so RequireAuth sends user to login.
       // (Also happens right after a failover: tokens are per-server.)
       localStorage.removeItem(TOKEN_KEY)
+      notifyUnauthorized()
     }
     // FastAPI validation errors arrive as { detail: [{ loc, msg, ... }] } —
     // join the messages so the user sees "body → quantity: ..." instead of
@@ -291,7 +300,10 @@ export async function apiDownload(path: string): Promise<Blob> {
 
   const { response } = await fetchWithFailover(path, { headers }, undefined)
   if (!response.ok) {
-    if (response.status === 401 && token) localStorage.removeItem(TOKEN_KEY)
+    if (response.status === 401 && token) {
+      localStorage.removeItem(TOKEN_KEY)
+      notifyUnauthorized()
+    }
     throw new ApiError(response.status, 'The download failed. Please try again.')
   }
   return response.blob()

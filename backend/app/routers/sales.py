@@ -20,6 +20,7 @@ async def record_sale(payload: SaleCreate, db: DBDep, user: CurrentUser) -> Sale
     doc, duplicate = await create_sale(
         db,
         payload,
+        actor_role=user["role"],
         actor_id=str(user["_id"]),
         actor_username=user["username"],
     )
@@ -64,7 +65,9 @@ async def list_sales(
 
 @router.get("/{sale_id}", response_model=SaleOut)
 async def get_sale_detail(sale_id: str, db: DBDep, user: CurrentUser) -> SaleOut:
-    return sale_out_from_doc(await get_sale(db, sale_id))
+    # get_sale already returns a SaleOut — re-wrapping it in
+    # sale_out_from_doc() raised TypeError -> 500 on every call.
+    return await get_sale(db, sale_id)
 
 
 @router.patch("/{sale_id}/status", response_model=SaleOut)

@@ -205,3 +205,43 @@ async def test_list_filters_date_range(client, owner_headers):
         "/api/sales", params={"from": "2020-01-01", "to": "2020-01-02"}, headers=owner_headers
     )
     assert empty.json()["total"] == 0
+
+
+async def test_staff_cannot_give_away_stock(client, owner_headers, staff_headers):
+    """Money policy: staff sales must charge. Zero-price lines and a 100%
+    discount require owner approval (owner keeps the ability to comp)."""
+    bu_id, _cat, item = await seed_stock(client, owner_headers, stock=70)
+
+    zero_price = await client.post(
+        "/api/sales",
+        json=sale_payload(bu_id, item["id"], unit_price="0.00", key="free-staff-01"),
+        headers=staff_headers,
+    )
+    assert zero_price.status_code == 403, zero_price.text
+    assert (await get_item(client, owner_headers, item["id"]))["current_stock"] == 70
+
+    full_discount = sale_payload(
+        bu_id, item["id"], quantity=5, unit_price="45.00", key="free-staff-02",
+        discount="225.00",
+    )
+    comped = await client.post("/api/sales", json=full_discount, headers=staff_headers)
+    assert comped.status_code == 403, comped.text
+    assert (await get_item(client, owner_headers, item["id"]))["current_stock"] == 70
+
+    # Owner can comp deliberately.
+    owner_comp = await client.post(
+        "/api/sales",
+        json=sale_payload(bu_id, item["id"], unit_price="0.00", key="free-owner-01"),
+        headers=owner_headers,
+    )
+    assert owner_comp.status_code == 201, owner_comp.text
+    assert owner_comp.json()["total_amount"] == "0.00"
+    assert (await get_item(client, owner_headers, item["id"]))["current_stock"] == 65
+
+    # Staff normal-priced sale still works (covered elsewhere, sanity here).
+    ok = await client.post(
+        "/api/sales",
+        json=sale_payload(bu_id, item["id"], quantity=1, unit_price="45.00", key="free-staff-03"),
+        headers=staff_headers,
+    )
+    assert ok.status_code == 201, ok.text

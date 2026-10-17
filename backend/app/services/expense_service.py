@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from bson import ObjectId
@@ -214,7 +214,8 @@ def build_expense_query(
         range_filter["$gte"] = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=UTC)
     if date_to:
         end = datetime.strptime(date_to, "%Y-%m-%d").replace(tzinfo=UTC)
-        range_filter["$lte"] = end.replace(hour=23, minute=59, second=59)
+        # Half-open: whole to-day included (no 23:59:59 second-loss).
+        range_filter["$lt"] = end + timedelta(days=1)
     if range_filter:
         query["spent_at"] = range_filter
     return query

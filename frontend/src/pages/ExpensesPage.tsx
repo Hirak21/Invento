@@ -54,6 +54,9 @@ export function ExpensesPage() {
   const [payee, setPayee] = useState('')
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [pending, setPending] = useState(false)
+  // Stable per-record key: retries after a timeout reuse it (server dedupes)
+  // instead of minting a new key and double-recording the expense.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID())
   const [pendingExpenses, setPendingExpenses] = useState<Expense[]>([])
   const [dueLoading, setDueLoading] = useState(false)
   const [dueError, setDueError] = useState<string | null>(null)
@@ -171,8 +174,10 @@ export function ExpensesPage() {
         description: description.trim(),
         payee: payee.trim() || null,
         date,
-        idempotency_key: crypto.randomUUID(),
+        idempotency_key: idempotencyKey,
       })
+      // Created — rotate the key so the next expense gets its own.
+      setIdempotencyKey(crypto.randomUUID())
       setSuccessMsg(
         `Expense ${record.expense_number} recorded — ₹${Number(record.amount).toFixed(2)} for ${formatCategory(record.category, categories)}.`,
       )

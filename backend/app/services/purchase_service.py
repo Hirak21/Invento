@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -48,6 +48,12 @@ async def create_purchase(
     Returns (purchase_doc, duplicate_flag). A repeated idempotency_key
     returns the original purchase without any further stock effect.
     """
+    # Idempotency pre-check BEFORE validation: a retried submission sees
+    # post-purchase stock and must return the original doc, not fail on rules.
+    existing = await db.purchases.find_one({"idempotency_key": payload.idempotency_key})
+    if existing is not None:
+        return existing, True
+
     # --- Validate references (outside tx; cheap reads) ---
     if not is_oid(payload.business_unit_id):
         raise BusinessRuleError("Business unit not found.")
@@ -240,8 +246,10 @@ def build_purchase_query(
         start = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=UTC, hour=0, minute=0, second=0)
         range_filter["$gte"] = start
     if date_to:
-        end = datetime.strptime(date_to, "%Y-%m-%d").replace(tzinfo=UTC, hour=23, minute=59, second=59)
-        range_filter["$lte"] = end
+        end = datetime.strptime(date_to, "%Y-%m-%d").replace(tzinfo=UTC)
+        # Half-open: include the whole to-day; $lte 23:59:59 dropped the
+        # final second of writes.
+        range_filter["$lt"] = end + timedelta(days=1)
     if range_filter:
         query["purchased_at"] = range_filter
     return query

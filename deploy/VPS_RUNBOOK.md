@@ -215,10 +215,10 @@ access via your provider's web panel:
 --- E. APP LOGIN + AUTOMATIC STANDBY (wired 2026-10-11) ---
 
 Shop app: https://invento-lite.web.app
-  Username: platiodevelopers@gmail.com
-  Password: Platio9080            (owner account; type carefully — 5 wrong
-                                  tries in a row look exactly like "login
-                                  is broken", then the right password works)
+  Username/Password: stored in the team password manager.
+  NEVER write the real password into this file (it lives in git history
+  once committed). Forgot it? Reset the owner password via the app's
+  Settings → Account section (or update password_hash directly in Mongo).
 
 How the two servers behave now (frontend tries in this order):
   1. PRIMARY = VPS https://invento-lite.duckdns.org (fast, live data).

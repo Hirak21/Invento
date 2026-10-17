@@ -1,14 +1,18 @@
-"""Build a downloadable xlsx report from operational data.
+"""Build downloadable xlsx and PDF executive-summary reports.
 
 Money is computed server-side (rule #3). Amount columns are numeric so the
 Summary sheet can use live Excel formulas tracing back to detail sheets.
+All display amounts use the shared Indian-grouping formatter (format_inr).
 
 Accounting treatment (confirmed): purchases are cash outflow when bought, so
 wastage (cost value of already-purchased stock) is a NON-CASH memo line.
 Cash P&L excludes wastage; Adjusted P&L shows it separately to avoid
 double-counting the same goods.
+
+Export filters mirror /reports/summary: completed sales only, cancelled
+orders excluded (stock restored), half-open [start, end) ranges.
 """
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from typing import Any
@@ -19,12 +23,26 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from app.services.dashboard_service import resolve_period
+from app.utils.money import format_inr
 
 _HEADER_FILL = PatternFill("solid", fgColor="1F2937")
 _HEADER_FONT = Font(bold=True, color="FFFFFF")
 _TITLE_FONT = Font(bold=True, size=14)
 _NOTE_FONT = Font(italic=True, size=10)
-_MONEY_FMT = '#,##0.00'
+_SECTION_FONT = Font(bold=True, size=11, color="1F2937")
+# Indian digit grouping (1,23,456.00) — matches the PDF/format_inr output.
+_MONEY_FMT = '#,##,##0.00'
+
+_PERIOD_LABELS = {"today": "day", "7d": "week", "month": "month", "custom": "custom"}
+
+
+def _period_label(period: str) -> str:
+    return _PERIOD_LABELS.get(period, period)
+
+
+def _inclusive_date(range_end: datetime) -> Any:
+    """Last inclusive calendar day of a half-open [start, end) range."""
+    return (range_end - timedelta(microseconds=1)).date()
 
 
 def _num(value: Any) -> float:
@@ -113,38 +131,18 @@ async def build_report_workbook(
     business_unit_id: str | None,
     tz_offset_minutes: int = 0,
 ) -> bytes:
-    range_start, range_end = resolve_period(period, date_from, date_to, tz_offset_minutes)
-    bu_filter: dict[str, Any] = {}
-    if business_unit_id:
-        bu_filter["business_unit_id"] = business_unit_id
-
-    sales = await db.sales.find(
-        {"sold_at": {"$gte": range_start, "$lt": range_end}, **bu_filter}
-    ).sort("sold_at", 1).to_list(None)
-    purchases = await db.purchases.find(
-        {"purchased_at": {"$gte": range_start, "$lt": range_end}, **bu_filter}
-    ).sort("purchased_at", 1).to_list(None)
-    expenses = await db.expenses.find(
-        {"spent_at": {"$gte": range_start, "$lt": range_end}, **bu_filter}
-    ).sort("spent_at", 1).to_list(None)
-    wastage = await db.wastage.find(
-        {"wasted_at": {"$gte": range_start, "$lt": range_end}, **bu_filter}
-    ).sort("wasted_at", 1).to_list(None)
-    movements = await db.inventory_movements.find(
-        {
-            "created_at": {"$gte": range_start, "$lt": range_end},
-            **bu_filter,
-            "movement_type": {"$in": ["WASTAGE", "ADJUSTMENT_IN", "ADJUSTMENT_OUT"]},
-        }
-    ).sort("created_at", 1).to_list(None)
-
-    # BU names for readable sheets (ids still stored for traceability).
-    bu_names: dict[str, str] = {}
-    try:
-        async for u in db.business_units.find({}):
-            bu_names[str(u["_id"])] = str(u.get("name", ""))
-    except Exception:
-        pass
+    data = await collect_report_data(
+        db, period=period, date_from=date_from, date_to=date_to,
+        business_unit_id=business_unit_id, tz_offset_minutes=tz_offset_minutes,
+    )
+    range_start = data["range_start"]
+    range_end = data["range_end"]
+    sales = data["sales"]
+    purchases = data["purchases"]
+    expenses = data["expenses"]
+    wastage = data["wastage"]
+    movements = data["movements"]
+    bu_names: dict[str, str] = data["bu_names"]
 
     def bu_label(bu_id: Any) -> str:
         bu_id = str(bu_id or "")
@@ -256,51 +254,62 @@ async def build_report_workbook(
     ws = wb.create_sheet(title="Summary", index=0)
     ws["A1"] = "Invento — Executive Summary"
     ws["A1"].font = _TITLE_FONT
-    ws["A2"] = f"Period: {range_start.date()} to {range_end.date()} ({period})"
-    ws["A3"] = f"Business unit: {bu_names.get(business_unit_id or '', business_unit_id) or 'All'}"
-    ws["A4"] = "Wastage is a non-cash memo (stock already paid at purchase) — excluded from cash outflow."
-    ws["A4"].font = _NOTE_FONT
+    ws["A2"] = f"Period: {range_start.date()} to {_inclusive_date(range_end)} ({_period_label(period)})"
+    ws["A3"] = f"Business Unit: {bu_names.get(business_unit_id or '', business_unit_id) or 'All'}"
 
     sw = "'Stock & Wastage'"
-    rows: list[tuple[str, Any]] = [
-        ("Metric", "Value"),
-        ("Gross sales (SUM Sales Subtotal)", f"=SUM(Sales!E2:E{s_last})"),
-        ("Discounts (SUM Sales Discount)", f"=SUM(Sales!F2:F{s_last})"),
-        ("Net sales (SUM Sales Total)", f"=SUM(Sales!G2:G{s_last})"),
-        ("Purchases (SUM Purchases Total)", f"=SUM(Purchases!H2:H{p_last})"),
-        ("Expenses (SUM Expenses Amount)", f"=SUM(Expenses!F2:F{e_last})"),
-        ("Total Outflow — cash (Purchases + Expenses)", "=B10+B11"),
-        ("Net Cash Balance (Net sales − cash outflow)", "=B9-B12"),
-        ("Wastage memo, non-cash (SUMIF WASTAGE cost)", f'=SUMIF({sw}!D2:D{sw_last},"WASTAGE",{sw}!G2:G{sw_last})'),
-        ("Net Balance / Adjusted P&L (Cash − Wastage)", "=B13-B14"),
-        ("Margin % on net sales (Adjusted ÷ Net)", '=IF(B9=0,0,B15/B9)'),
-        ("Sales via Cash (SUMIF)", f'=SUMIF(Sales!H2:H{s_last},"cash",Sales!G2:G{s_last})'),
-        ("Sales via UPI (SUMIF)", f'=SUMIF(Sales!H2:H{s_last},"upi",Sales!G2:G{s_last})'),
-        ("Sales via Card (SUMIF)", f'=SUMIF(Sales!H2:H{s_last},"card",Sales!G2:G{s_last})'),
-        ("Sale Count", len(sales)),
-        ("Purchase Count", len(purchases)),
-        ("Expense Count", len(expenses)),
-        ("Wastage Entries", len(wastage)),
-        ("Adjustment Movements", len(movements)),
-    ]
-    start = 6
-    for r, (metric, val) in enumerate(rows, start=start):
-        a = ws.cell(row=r, column=1, value=metric)
-        b = ws.cell(row=r, column=2, value=val)
-        if r == start:
-            a.fill = _HEADER_FILL
-            a.font = _HEADER_FONT
-            b.fill = _HEADER_FILL
-            b.font = _HEADER_FONT
-    # Money + percent formatting (B7..B15 money, B16 percent).
-    for r in range(start + 1, start + 10):
-        ws.cell(row=r, column=2).number_format = _MONEY_FMT
-    ws.cell(row=start + 10, column=2).number_format = '0.00%'
-    for r in range(start + 11, start + 14):
-        ws.cell(row=r, column=2).number_format = _MONEY_FMT
+    srow = 5
+
+    def section(title: str) -> None:
+        nonlocal srow
+        ws.cell(row=srow, column=1, value=title).font = _SECTION_FONT
+        srow += 1
+
+    def metric(label: str, value: Any, *, money: bool = True) -> int:
+        nonlocal srow
+        ws.cell(row=srow, column=1, value=label)
+        cell = ws.cell(row=srow, column=2, value=value)
+        if money:
+            cell.number_format = _MONEY_FMT
+        r = srow
+        srow += 1
+        return r
+
+    section("METRICS SUMMARY")
+    metric("Gross sales", f"=SUM(Sales!E2:E{s_last})")
+    metric("Discounts", f"=SUM(Sales!F2:F{s_last})")
+    r_net = metric("Net sales", f"=SUM(Sales!G2:G{s_last})")
+    r_purch = metric("Purchases", f"=SUM(Purchases!H2:H{p_last})")
+    r_exp = metric("Expenses", f"=SUM(Expenses!F2:F{e_last})")
+    r_out = metric("Total Outflow (Purchases + Expenses)", f"=B{r_purch}+B{r_exp}")
+    r_cash = metric("Net Cash Balance (Net sales - cash outflow)", f"=B{r_net}-B{r_out}")
+    r_wastage = metric(
+        "Wastage memo (non-cash)",
+        f'=SUMIF({sw}!D2:D{sw_last},"WASTAGE",{sw}!G2:G{sw_last})',
+    )
+    r_adj = metric("Net Balance / Adjusted P&L (Cash - Wastage)", f"=B{r_cash}-B{r_wastage}")
+    r_margin = metric("Margin % on net sales", f'=IF(B{r_net}=0,"N/A",B{r_adj}/B{r_net})', money=False)
+    ws.cell(row=r_margin, column=2).number_format = "0.00%"
+    metric("Sales via Cash", f'=SUMIF(Sales!H2:H{s_last},"cash",Sales!G2:G{s_last})')
+    metric("Sales via UPI", f'=SUMIF(Sales!H2:H{s_last},"upi",Sales!G2:G{s_last})')
+    metric("Sales via Card", f'=SUMIF(Sales!H2:H{s_last},"card",Sales!G2:G{s_last})')
+    note = ws.cell(
+        row=srow, column=1,
+        value="Wastage is a non-cash memo (stock already paid at purchase) — excluded from cash outflow.",
+    )
+    note.font = _NOTE_FONT
+    srow += 2
+
+    section("OPERATIONAL COUNTS")
+    metric("Sale Count", len(sales), money=False)
+    metric("Purchase Count", len(purchases), money=False)
+    metric("Expense Count", len(expenses), money=False)
+
     _autosize(ws)
 
-    for sheet in (ws, ws_sales, ws_pur, ws_exp, ws_sw):
+    # Summary is two narrow columns — portrait reads better when printed.
+    _setup_print_sheet(ws, landscape=False)
+    for sheet in (ws_sales, ws_pur, ws_exp, ws_sw):
         _setup_print_sheet(sheet, landscape=True, fit_width=1)
 
     buf = BytesIO()
@@ -324,8 +333,15 @@ async def collect_report_data(
         bu_filter["business_unit_id"] = business_unit_id
 
     sales = await db.sales.find(
-        {"sold_at": {"$gte": range_start, "$lt": range_end}, **bu_filter}
-    ).sort("sold_at", 1).to_list(None)
+        {
+            "sold_at": {"$gte": range_start, "$lt": range_end},
+            # Mirror /reports/summary: completed sales only; cancelled
+            # orders had their stock restored and are not revenue.
+            "status": "completed",
+            "order_status": {"$ne": "CANCELLED"},
+            **bu_filter,
+        }
+    ).sort("sold_at", -1).to_list(None)
     purchases = await db.purchases.find(
         {"purchased_at": {"$gte": range_start, "$lt": range_end}, **bu_filter}
     ).sort("purchased_at", 1).to_list(None)
@@ -335,11 +351,14 @@ async def collect_report_data(
     wastage = await db.wastage.find(
         {"wasted_at": {"$gte": range_start, "$lt": range_end}, **bu_filter}
     ).sort("wasted_at", 1).to_list(None)
+    # Adjustments only — WASTAGE rows come from the wastage collection
+    # (with estimated_value); listing the movements too would double-count
+    # them in the Stock & Wastage sheet and the wastage memo SUMIF.
     movements = await db.inventory_movements.find(
         {
             "created_at": {"$gte": range_start, "$lt": range_end},
             **bu_filter,
-            "movement_type": {"$in": ["WASTAGE", "ADJUSTMENT_IN", "ADJUSTMENT_OUT"]},
+            "movement_type": {"$in": ["ADJUSTMENT_IN", "ADJUSTMENT_OUT"]},
         }
     ).sort("created_at", 1).to_list(None)
 
@@ -364,38 +383,80 @@ async def collect_report_data(
     }
 
 
-def _fmt_money(amount: float) -> str:
-    return f"{amount:,.2f}"
+def _dec(value: Any) -> Decimal:
+    """Tolerant money parse for report math (None/garbage -> 0)."""
+    if value is None:
+        return Decimal("0")
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return Decimal("0")
+
+
+def compute_report_totals(
+    sales: list[dict[str, Any]],
+    purchases: list[dict[str, Any]],
+    expenses: list[dict[str, Any]],
+    wastage: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Exact Decimal totals for the executive summary (used by the PDF).
+
+    Invariants: net == gross - discounts; outflow == purchases + expenses;
+    cash == net - outflow; adjusted == cash - wastage; the payment split
+    sums back to net (cash + upi + card + any other methods). Margin is
+    None when net sales are zero (displayed as "N/A").
+    """
+    gross = sum((_dec(s.get("subtotal", "0")) for s in sales), Decimal("0"))
+    discounts = sum((_dec(s.get("discount", "0")) for s in sales), Decimal("0"))
+    net = sum((_dec(s.get("total_amount", "0")) for s in sales), Decimal("0"))
+    purch_total = sum((_dec(p.get("total_amount", "0")) for p in purchases), Decimal("0"))
+    exp_total = sum((_dec(e.get("amount", "0")) for e in expenses), Decimal("0"))
+    outflow = purch_total + exp_total
+    cash = net - outflow
+    wastage_memo = sum((_dec(w.get("estimated_value", "0")) for w in wastage), Decimal("0"))
+    adjusted = cash - wastage_memo
+    payment: dict[str, Decimal] = {}
+    for s in sales:
+        method = str(s.get("payment_method", "") or "unknown").lower()
+        payment[method] = payment.get(method, Decimal("0")) + _dec(s.get("total_amount", "0"))
+    margin = None if net == 0 else (adjusted / net * 100)
+    return {
+        "gross": gross,
+        "discounts": discounts,
+        "net": net,
+        "purchases": purch_total,
+        "expenses": exp_total,
+        "outflow": outflow,
+        "cash": cash,
+        "wastage_memo": wastage_memo,
+        "adjusted": adjusted,
+        "margin_pct": margin,
+        "payment": payment,
+    }
 
 
 def build_report_pdf(data: dict[str, Any]) -> bytes:
-    """PDF mirror of the Excel workbook: same sections, same column order.
+    """Invento — Executive Summary (A4 portrait).
 
-    Layout rules (so pages never break mid-row and columns align like Excel):
-    - Landscape A4 with balanced margins.
-    - Every table uses ``repeatRows=1`` (header on each page) and
-      ``splitByRow=1`` (rows keep together, never sliced horizontally).
-    - Column widths are proportional to the usable page width (sum == 100%).
-    - Long text cells wrap via Paragraph instead of widening the table.
+    Spec layout: title + period/BU subtitles, METRICS SUMMARY (wastage as a
+    non-cash memo), OPERATIONAL COUNTS, then newest-first sales transactions.
+    Every page carries the summary footer with "Page X of Y". Long item
+    names wrap (Paragraph) — never truncated. All money uses the shared
+    Indian-grouping formatter (format_inr).
     """
+    from xml.sax.saxutils import escape as xml_escape
+
     from reportlab.lib import colors
-    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import mm
-    from reportlab.platypus import (
-        PageBreak,
-        Paragraph,
-        SimpleDocTemplate,
-        Spacer,
-        Table,
-        TableStyle,
-    )
+    from reportlab.pdfgen import canvas as pdf_canvas
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
     sales = data["sales"]
     purchases = data["purchases"]
     expenses = data["expenses"]
     wastage = data["wastage"]
-    movements = data["movements"]
     bu_names: dict[str, str] = data.get("bu_names", {})
     period = data.get("period", "")
     range_start = data["range_start"]
@@ -406,33 +467,53 @@ def build_report_pdf(data: dict[str, Any]) -> bytes:
         bu_id = str(bu_id or "")
         return bu_names.get(bu_id, bu_id)
 
+    totals = compute_report_totals(sales, purchases, expenses, wastage)
+
     buf = BytesIO()
-    page_w, page_h = landscape(A4)
-    margin = 12 * mm
+    page_w, _page_h = A4
+    margin = 16 * mm
     usable = page_w - 2 * margin
 
-    def _footer(canvas, doc) -> None:
-        canvas.saveState()
-        canvas.setFont("Helvetica", 7)
-        canvas.setFillColor(colors.HexColor("#6B7280"))
-        canvas.drawString(margin, 10 * mm, f"Invento report · {period} · {range_start.date()} to {range_end.date()}")
-        canvas.drawRightString(page_w - margin, 10 * mm, f"Page {doc.page}")
-        canvas.restoreState()
+    class NumberedCanvas(pdf_canvas.Canvas):
+        """Two-pass canvas so every page can print 'Page X of Y'."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self._saved_states: list[dict[str, Any]] = []
+
+        def showPage(self) -> None:
+            self._saved_states.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self) -> None:
+            total = len(self._saved_states)
+            for state in self._saved_states:
+                self.__dict__.update(state)
+                self.saveState()
+                self.setFont("Helvetica", 7)
+                self.setFillColor(colors.HexColor("#6B7280"))
+                self.drawString(margin, 10 * mm, "Invento — Executive Summary")
+                self.drawRightString(
+                    page_w - margin, 10 * mm, f"Page {self._pageNumber} of {total}"
+                )
+                self.restoreState()
+                super().showPage()
+            super().save()
 
     doc = SimpleDocTemplate(
         buf,
-        pagesize=landscape(A4),
+        pagesize=A4,
         leftMargin=margin,
         rightMargin=margin,
         topMargin=14 * mm,
-        bottomMargin=14 * mm,
-        title="Invento report",
+        bottomMargin=16 * mm,
+        title="Invento — Executive Summary",
     )
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle("RTitle", parent=styles["Title"], fontSize=16, spaceAfter=2)
     sub_style = ParagraphStyle("RSub", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#4B5563"), spaceAfter=1)
     note_style = ParagraphStyle("RNote", parent=styles["Normal"], fontSize=7, textColor=colors.HexColor("#6B7280"), spaceAfter=6)
-    h2 = ParagraphStyle("RH2", parent=styles["Heading2"], fontSize=12, spaceBefore=8, spaceAfter=4)
+    h2 = ParagraphStyle("RH2", parent=styles["Heading2"], fontSize=11, spaceBefore=8, spaceAfter=4)
     cell_style = ParagraphStyle("RCell", parent=styles["Normal"], fontSize=7, leading=9)
     cell_small = ParagraphStyle("RCellSm", parent=styles["Normal"], fontSize=6.5, leading=8)
     cell_right = ParagraphStyle("RCellR", parent=cell_style, alignment=2)
@@ -442,7 +523,7 @@ def build_report_pdf(data: dict[str, Any]) -> bytes:
         return Paragraph(str(text if text != "" else "—"), cell_right if right else cell_style)
 
     def H(text: str) -> Paragraph:
-        return Paragraph(text, head_style)
+        return Paragraph(xml_escape(text), head_style)
 
     dark = colors.HexColor("#1F2937")
     grid = colors.HexColor("#D1D5DB")
@@ -452,14 +533,17 @@ def build_report_pdf(data: dict[str, Any]) -> bytes:
         table_data = [[H(h) for h in headers]]
         for row in rows:
             cells: list[Any] = []
-            for i, val in enumerate(row):
+            for val in row:
+                if isinstance(val, Paragraph):
+                    cells.append(val)
+                    continue
                 right = isinstance(val, tuple) and val[0] == "R"
                 text = val[1] if isinstance(val, tuple) else val
-                style = cell_small if len(str(text)) > 60 else cell_style
                 if right:
-                    cells.append(Paragraph(str(text), cell_right))
+                    cells.append(Paragraph(xml_escape(str(text)), cell_right))
                 else:
-                    cells.append(Paragraph(str(text), style))
+                    style = cell_small if len(str(text)) > 60 else cell_style
+                    cells.append(Paragraph(xml_escape(str(text)), style))
             table_data.append(cells)
         t = Table(table_data, colWidths=col_widths, repeatRows=1, splitByRow=1)
         t.setStyle(TableStyle([
@@ -478,129 +562,85 @@ def build_report_pdf(data: dict[str, Any]) -> bytes:
     def R(text: str) -> tuple[str, str]:
         return ("R", text)
 
-    # --- Python-side totals (mirror the Excel SUM formulas) ---
-    gross = sum(_num(s.get("subtotal", "0")) for s in sales)
-    discounts = sum(_num(s.get("discount", "0")) for s in sales)
-    net_sales = sum(_num(s.get("total_amount", "0")) for s in sales)
-    purch_total = sum(_num(p.get("total_amount", "0")) for p in purchases)
-    exp_total = sum(_num(e.get("amount", "0")) for e in expenses)
-    outflow = purch_total + exp_total
-    cash_bal = net_sales - outflow
-    wastage_memo = sum(_num(w.get("estimated_value", "0")) for w in wastage)
-    adjusted = cash_bal - wastage_memo
-    margin = (adjusted / net_sales * 100) if net_sales else 0.0
-
-    def _pay_sum(rows: list[dict], key: str, method: str) -> float:
-        return sum(_num(r.get(key, "0")) for r in rows if str(r.get("payment_method", "") or "") == method)
+    def inr(value: Decimal) -> str:
+        return format_inr(value)
 
     story: list[Any] = []
     bu_title = bu_names.get(business_unit_id or "", business_unit_id) or "All"
     story.append(Paragraph("Invento — Executive Summary", title_style))
-    story.append(Paragraph(f"Period: {range_start.date()} to {range_end.date()} ({period}) &nbsp;&nbsp;·&nbsp;&nbsp; Business unit: {bu_title}", sub_style))
-    story.append(Paragraph("Wastage is a non-cash memo (stock already paid at purchase) — excluded from cash outflow.", note_style))
+    story.append(Paragraph(
+        f"Period: {range_start.date()} to {_inclusive_date(range_end)} ({_period_label(period)})",
+        sub_style,
+    ))
+    story.append(Paragraph(f"Business Unit: {bu_title}", sub_style))
+    story.append(Spacer(1, 4))
 
-    summary_rows = [
-        ["Gross sales", R(_fmt_money(gross))],
-        ["Discounts", R(_fmt_money(discounts))],
-        ["Net sales", R(_fmt_money(net_sales))],
-        ["Purchases", R(_fmt_money(purch_total))],
-        ["Expenses", R(_fmt_money(exp_total))],
-        ["Total Outflow — cash (Purchases + Expenses)", R(_fmt_money(outflow))],
-        ["Net Cash Balance (Net sales − cash outflow)", R(_fmt_money(cash_bal))],
-        ["Wastage memo, non-cash", R(_fmt_money(wastage_memo))],
-        ["Net Balance / Adjusted P&L (Cash − Wastage)", R(_fmt_money(adjusted))],
-        ["Margin % on net sales", R(f"{margin:.2f}%")],
-        ["Sales via Cash", R(_fmt_money(_pay_sum(sales, "total_amount", "cash")))],
-        ["Sales via UPI", R(_fmt_money(_pay_sum(sales, "total_amount", "upi")))],
-        ["Sales via Card", R(_fmt_money(_pay_sum(sales, "total_amount", "card")))],
+    metric_rows = [
+        ["Gross sales", R(inr(totals["gross"]))],
+        ["Discounts", R(inr(totals["discounts"]))],
+        ["Net sales", R(inr(totals["net"]))],
+        ["Purchases", R(inr(totals["purchases"]))],
+        ["Expenses", R(inr(totals["expenses"]))],
+        ["Total Outflow (Purchases + Expenses)", R(inr(totals["outflow"]))],
+        ["Net Cash Balance (Net sales - cash outflow)", R(inr(totals["cash"]))],
+        ["Wastage memo (non-cash)", R(inr(totals["wastage_memo"]))],
+        ["Net Balance / Adjusted P&L (Cash - Wastage)", R(inr(totals["adjusted"]))],
+        [
+            "Margin % on net sales",
+            R("N/A" if totals["margin_pct"] is None else f"{totals['margin_pct']:.2f}%"),
+        ],
+        ["Sales via Cash", R(inr(totals["payment"].get("cash", Decimal("0"))))],
+        ["Sales via UPI", R(inr(totals["payment"].get("upi", Decimal("0"))))],
+        ["Sales via Card", R(inr(totals["payment"].get("card", Decimal("0"))))],
+    ]
+    # Supplementary rows so the split stays reconcilable when non-standard
+    # methods (room charge, bank transfer, credit) carry revenue.
+    for method in sorted(totals["payment"]):
+        if method in ("cash", "upi", "card"):
+            continue
+        amount = totals["payment"][method]
+        if amount == 0:
+            continue
+        metric_rows.append(["Sales via " + method.replace("_", " ").title(), R(inr(amount))])
+    story.append(Paragraph("METRICS SUMMARY", h2))
+    story.append(styled_table(["Metric", "Value"], metric_rows, [0.70, 0.30]))
+    story.append(Paragraph(
+        "Wastage is a non-cash memo (stock already paid at purchase) — excluded from cash outflow.",
+        note_style,
+    ))
+
+    count_rows = [
         ["Sale Count", R(str(len(sales)))],
         ["Purchase Count", R(str(len(purchases)))],
         ["Expense Count", R(str(len(expenses)))],
-        ["Wastage Entries", R(str(len(wastage)))],
-        ["Adjustment Movements", R(str(len(movements)))],
     ]
-    story.append(styled_table(["Metric", "Value"], summary_rows, [0.72, 0.28]))
+    story.append(Paragraph("OPERATIONAL COUNTS", h2))
+    story.append(styled_table(["Count", "Value"], count_rows, [0.70, 0.30]))
 
-    # --- Sales ---
-    story.append(Paragraph(f"Sales ({len(sales)})", h2))
+    story.append(Paragraph(f"SALES ({len(sales)}) — RECENT TRANSACTIONS", h2))
     if sales:
         rows = []
         for s in sales:
-            items = ", ".join(f"{i.get('item_name', '?')} x{i.get('quantity', '?')}" for i in s.get("items", []))
+            items = ", ".join(
+                f"{i.get('item_name', '?')} x{i.get('quantity', '?')}" for i in s.get("items", [])
+            )
             rows.append([
-                s.get("sale_number", ""), _ts(s.get("sold_at", "")), bu_label(s.get("business_unit_id", "")),
-                items[:220], R(_fmt_money(_num(s.get("subtotal", "0")))),
-                R(_fmt_money(_num(s.get("discount", "0")))), R(_fmt_money(_num(s.get("total_amount", "0")))),
-                str(s.get("payment_method", "") or ""),
+                s.get("sale_number", ""),
+                _ts(s.get("sold_at", "")),
+                bu_label(s.get("business_unit_id", "")),
+                Paragraph(xml_escape(items), cell_small),
+                R(inr(_dec(s.get("subtotal", "0")))),
+                R(inr(_dec(s.get("discount", "0")))),
             ])
         story.append(styled_table(
-            ["Sale #", "Timestamp", "Business Unit", "Items", "Subtotal", "Discount", "Total", "Payment"],
-            rows, [0.11, 0.12, 0.11, 0.28, 0.09, 0.09, 0.10, 0.10],
+            ["Sale #", "Timestamp", "Business Unit", "Items", "Subtotal", "Discount"],
+            rows, [0.13, 0.13, 0.13, 0.32, 0.145, 0.145],
         ))
     else:
         story.append(Paragraph("No sales found for this period.", cell_style))
 
-    # --- Purchases ---
-    story.append(Paragraph(f"Purchases ({len(purchases)})", h2))
-    if purchases:
-        rows = []
-        for p in purchases:
-            items = ", ".join(
-                f"{i.get('item_name', '?')} x{i.get('quantity', '?')} @ {i.get('unit_cost', '?')}" for i in p.get("items", [])
-            )
-            rows.append([
-                p.get("purchase_number", ""), _ts(p.get("purchased_at", "")), bu_label(p.get("business_unit_id", "")),
-                p.get("supplier_name") or p.get("supplier_id") or "", items[:200],
-                R(_fmt_money(_num(p.get("subtotal_amount", p.get("total_amount", "0"))))),
-                R(_fmt_money(_num(p.get("gst_amount", "0")))), R(_fmt_money(_num(p.get("total_amount", "0")))),
-                str(p.get("payment_method", "") or ""), str(p.get("payment_status", "") or ""),
-            ])
-        story.append(styled_table(
-            ["Purchase #", "Timestamp", "Business Unit", "Supplier", "Items", "Subtotal", "GST", "Total", "Payment", "Status"],
-            rows, [0.10, 0.10, 0.09, 0.09, 0.24, 0.08, 0.07, 0.08, 0.08, 0.07],
-        ))
-    else:
-        story.append(Paragraph("No purchases found for this period.", cell_style))
-
-    # --- Expenses ---
-    story.append(Paragraph(f"Expenses ({len(expenses)})", h2))
-    if expenses:
-        rows = [
-            [e.get("expense_number", ""), _ts(e.get("spent_at", "")), bu_label(e.get("business_unit_id", "")),
-             e.get("category", ""), (e.get("description", "") or "")[:200],
-             R(_fmt_money(_num(e.get("amount", "0")))), str(e.get("payment_method", "") or ""),
-             str(e.get("payment_status", "") or "")]
-            for e in expenses
-        ]
-        story.append(styled_table(
-            ["Expense #", "Timestamp", "Business Unit", "Category", "Description", "Amount", "Payment", "Status"],
-            rows, [0.11, 0.12, 0.12, 0.11, 0.26, 0.10, 0.09, 0.09],
-        ))
-    else:
-        story.append(Paragraph("No expenses recorded for this period.", cell_style))
-
-    # --- Stock & Wastage ---
-    story.append(Paragraph(f"Stock & Wastage ({len(wastage) + len(movements)})", h2))
-    sw_rows: list[list[Any]] = []
-    for w in wastage:
-        sw_rows.append([_ts(w.get("wasted_at", "")), bu_label(w.get("business_unit_id", "")), w.get("item_name", ""),
-                        "WASTAGE", str(w.get("quantity", "")), w.get("unit", ""),
-                        R(_fmt_money(_num(w.get("estimated_value", "0")))), w.get("reason", ""), (w.get("notes", "") or "")[:160]])
-    for m in movements:
-        sw_rows.append([_ts(m.get("created_at", "")), bu_label(m.get("business_unit_id", "")), str(m.get("item_id", "")),
-                        m.get("movement_type", ""), str(m.get("quantity", "")), m.get("unit", ""),
-                        R(_fmt_money(_num(m.get("unit_cost", "0") or "0"))), m.get("reference_type", ""), (m.get("notes", "") or "")[:160]])
-    if sw_rows:
-        story.append(styled_table(
-            ["Date", "Business Unit", "Item", "Type", "Qty", "Unit", "Cost Value", "Reason / Ref", "Notes"],
-            sw_rows, [0.11, 0.11, 0.13, 0.11, 0.07, 0.06, 0.10, 0.12, 0.19],
-        ))
-    else:
-        story.append(Paragraph("No wastage or adjustments for this period.", cell_style))
-
     story.append(Spacer(1, 6))
-    _ = PageBreak  # keep import used if sections grow; flow handles breaks
-    doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
+    doc.build(story, canvasmaker=NumberedCanvas)
     return buf.getvalue()
 
 

@@ -48,29 +48,46 @@ export function WastagePage() {
     if (error) errorRef.current?.focus()
   }, [error])
 
+  // Monotonic request id: only the newest in-flight load may write state,
+  // so a slow response can never overwrite fresher data (or land after
+  // unmount).
+  const loadSeqRef = useRef(0)
+
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current
     setLoading(true)
     try {
       const res = await listWastage({ business_unit_id: selectedBuId ?? undefined })
+      if (seq !== loadSeqRef.current) return
       setRecords(res.records)
       setTotalValue(res.records.reduce((sum, r) => sum + Number(r.estimated_value), 0))
       setError(null)
     } catch (err) {
+      if (seq !== loadSeqRef.current) return
       setError(err instanceof Error ? err.message : 'Could not load wastage records.')
     } finally {
-      setLoading(false)
+      if (seq === loadSeqRef.current) setLoading(false)
     }
   }, [selectedBuId])
 
   useEffect(() => {
     void load()
+    return () => {
+      loadSeqRef.current++ // invalidate in-flight results on unmount/dep change
+    }
   }, [load])
 
   useEffect(() => {
     if (!selectedBuId) return
+    let cancelled = false
     void listItems({ business_unit_id: selectedBuId })
-      .then((res) => setItems(res.items))
+      .then((res) => {
+        if (!cancelled) setItems(res.items)
+      })
       .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
   }, [selectedBuId])
 
   async function handleSubmit(event: FormEvent) {

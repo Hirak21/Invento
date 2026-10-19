@@ -39,6 +39,12 @@ class BusinessRuleError(AppError):
     detail = "Operation violates a business rule."
 
 
+class RateLimitedError(AppError):
+    """Too many failed attempts from one client (brute-force guard)."""
+    status_code = 429
+    detail = "Too many failed attempts. Please wait a moment and try again."
+
+
 def register_exception_handlers(app) -> None:  # noqa: ANN001 - FastAPI app
     from fastapi import Request
     from fastapi.exceptions import RequestValidationError

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 import { Button } from '@/components/ui/Button'
@@ -47,7 +47,14 @@ export function PurchasesPage() {
   const [dueError, setDueError] = useState<string | null>(null)
   const [settlingId, setSettlingId] = useState<string | null>(null)
 
+  // Per-callback request ids: only the newest in-flight load may write
+  // state, so a slow response can never overwrite fresher data (or land
+  // after unmount).
+  const loadSeqRef = useRef(0)
+  const loadDueSeqRef = useRef(0)
+
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current
     setLoading(true)
     setError(null)
     try {
@@ -57,16 +64,19 @@ export function PurchasesPage() {
         from: dateFrom || undefined,
         to: dateTo || undefined,
       })
+      if (seq !== loadSeqRef.current) return
       setPurchases(res.purchases)
       setTotal(res.total)
     } catch (err) {
+      if (seq !== loadSeqRef.current) return
       setError(err instanceof Error ? err.message : 'Could not load purchases.')
     } finally {
-      setLoading(false)
+      if (seq === loadSeqRef.current) setLoading(false)
     }
   }, [selectedBuId, supplierFilter, dateFrom, dateTo])
 
   const loadDue = useCallback(async () => {
+    const seq = ++loadDueSeqRef.current
     setDueLoading(true)
     setDueError(null)
     try {
@@ -77,11 +87,13 @@ export function PurchasesPage() {
         from: dateFrom || undefined,
         to: dateTo || undefined,
       })
+      if (seq !== loadDueSeqRef.current) return
       setPendingPurchases(res.purchases)
     } catch (err) {
+      if (seq !== loadDueSeqRef.current) return
       setDueError(err instanceof Error ? err.message : 'Could not load outstanding dues.')
     } finally {
-      setDueLoading(false)
+      if (seq === loadDueSeqRef.current) setDueLoading(false)
     }
   }, [selectedBuId, supplierFilter, dateFrom, dateTo])
 
@@ -106,15 +118,33 @@ export function PurchasesPage() {
 
   useEffect(() => {
     void load()
+    return () => {
+      loadSeqRef.current++ // invalidate in-flight results on unmount/dep change
+    }
   }, [load])
 
   useEffect(() => {
     void loadDue()
+    return () => {
+      loadDueSeqRef.current++
+    }
   }, [loadDue])
 
   useEffect(() => {
-    void listBusinessUnits().then(setBusinessUnits).catch(() => undefined)
-    void listSuppliers().then(setSuppliers).catch(() => undefined)
+    let cancelled = false
+    void listBusinessUnits()
+      .then((units) => {
+        if (!cancelled) setBusinessUnits(units)
+      })
+      .catch(() => undefined)
+    void listSuppliers()
+      .then((rows) => {
+        if (!cancelled) setSuppliers(rows)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   // Deep link from Dashboard Quick Actions ("+ Purchase") or Stock Restock:

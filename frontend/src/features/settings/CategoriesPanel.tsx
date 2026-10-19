@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { useAliveRef } from '@/hooks/useAliveRef'
 import { useAuth } from '@/hooks/useAuth'
 import { createCategory, listCategories, updateCategory } from '@/services/masterData'
 import type { Category } from '@/types/master'
@@ -10,6 +11,7 @@ import type { Category } from '@/types/master'
 export function CategoriesPanel() {
   const { user } = useAuth()
   const isOwner = user?.role === 'owner'
+  const alive = useAliveRef()
   const [categories, setCategories] = useState<Category[]>([])
   const [loading, setLoading] = useState(true)
   const [name, setName] = useState('')
@@ -19,8 +21,11 @@ export function CategoriesPanel() {
   async function reload() {
     setLoading(true)
     try {
-      setCategories(await listCategories(true))
+      const rows = await listCategories(true)
+      if (!alive.current) return
+      setCategories(rows)
     } catch (err) {
+      if (!alive.current) return
       setError(err instanceof Error ? err.message : 'Could not load categories.')
     } finally {
       setLoading(false)

@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { useAliveRef } from '@/hooks/useAliveRef'
 import { useAuth } from '@/hooks/useAuth'
 import {
   createExpenseCategory,
@@ -21,6 +22,7 @@ import { EXPENSE_CATEGORIES } from '@/types/expense'
 export function ExpenseCategoriesPanel() {
   const { user } = useAuth()
   const isOwner = user?.role === 'owner'
+  const alive = useAliveRef()
   const [categories, setCategories] = useState<ExpenseCategoryInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [name, setName] = useState('')
@@ -33,10 +35,12 @@ export function ExpenseCategoriesPanel() {
     setLoading(true)
     try {
       const cats = await listExpenseCategories()
+      if (!alive.current) return
       setCategories(cats)
       // Server marks built-ins; fall back to the known list.
       setError(null)
     } catch (err) {
+      if (!alive.current) return
       setError(err instanceof Error ? err.message : 'Could not load expense categories.')
     } finally {
       setLoading(false)

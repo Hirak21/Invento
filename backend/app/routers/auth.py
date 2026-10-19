@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models.auth import (
@@ -14,6 +14,7 @@ from app.models.user import UserRole, UserOut, utc_now, user_out_from_doc
 from app.routers.deps import CurrentUser, DBDep
 from app.utils.audit import log_audit
 from app.utils.errors import BusinessRuleError, ConflictError, ForbiddenError, UnauthorizedError
+from app.utils.rate_limit import login_limiter
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -57,11 +58,16 @@ async def bootstrap_owner(payload: BootstrapOwnerRequest, db: DBDep) -> TokenRes
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(payload: LoginRequest, db: DBDep) -> TokenResponse:
+async def login(payload: LoginRequest, db: DBDep, request: Request) -> TokenResponse:
+    client_ip = request.client.host if request.client else "unknown"
+    login_limiter.check(client_ip)
+
     username = payload.username.strip().lower()
     user = await db.users.find_one({"username": username})
     if user is None or not verify_password(payload.password, user.get("password_hash", "")):
+        login_limiter.record_failure(client_ip)
         raise UnauthorizedError("Invalid username or password.")
+    login_limiter.clear(client_ip)
     if not user.get("active", False):
         raise UnauthorizedError("This account has been deactivated.")
     token = create_access_token(subject=str(user["_id"]), role=user["role"])

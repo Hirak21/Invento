@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { useAliveRef } from '@/hooks/useAliveRef'
 import { useAuth } from '@/hooks/useAuth'
 import { getSettings, updateSettings } from '@/services/settings'
 import type { BusinessSettings } from '@/services/settings'
@@ -12,6 +13,7 @@ const MAX_LOGO_BYTES = 700_000
 export function BusinessPanel() {
   const { user } = useAuth()
   const isOwner = user?.role === 'owner'
+  const alive = useAliveRef()
   const [settings, setSettings] = useState<BusinessSettings | null>(null)
   const [loading, setLoading] = useState(true)
   const [name, setName] = useState('')
@@ -27,10 +29,12 @@ export function BusinessPanel() {
     setError(null)
     try {
       const s = await getSettings()
+      if (!alive.current) return
       setSettings(s)
       setName(s.business_name)
       setLogoOk(true)
     } catch (err) {
+      if (!alive.current) return
       setError(err instanceof Error ? err.message : 'Could not load business settings.')
     } finally {
       setLoading(false)

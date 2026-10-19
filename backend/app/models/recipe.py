@@ -57,6 +57,19 @@ class RecipeUpdate(BaseModel):
     active: bool | None = None
     selling_price: MoneyAmount | None = None
     category_id: str | None = None
+    # Optional full BOM replacement: when supplied, the recipe's ingredients
+    # are swapped for this list inside the same transaction as the scalar
+    # updates (all-or-nothing edit). None leaves the current BOM untouched.
+    ingredients: list[RecipeIngredientIn] | None = Field(default=None)
+
+    @field_validator("ingredients")
+    @classmethod
+    def _ingredients_non_empty(
+        cls, v: list[RecipeIngredientIn] | None
+    ) -> list[RecipeIngredientIn] | None:
+        if v is not None and len(v) == 0:
+            raise ValueError("A recipe needs at least one ingredient.")
+        return v
 
 
 class RecipeOut(BaseModel):

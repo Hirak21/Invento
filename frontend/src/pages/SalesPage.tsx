@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Select'
@@ -46,7 +46,13 @@ export function SalesPage() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
 
+  // Monotonic request id: only the newest in-flight load may write state,
+  // so a slow response can never overwrite fresher data (or land after
+  // unmount).
+  const loadSeqRef = useRef(0)
+
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current
     setLoading(true)
     setError(null)
     try {
@@ -55,21 +61,34 @@ export function SalesPage() {
         from: dateFrom || undefined,
         to: dateTo || undefined,
       })
+      if (seq !== loadSeqRef.current) return
       setSales(res.sales)
       setTotal(res.total)
     } catch (err) {
+      if (seq !== loadSeqRef.current) return
       setError(err instanceof Error ? err.message : 'Could not load sales.')
     } finally {
-      setLoading(false)
+      if (seq === loadSeqRef.current) setLoading(false)
     }
   }, [selectedBuId, dateFrom, dateTo])
 
   useEffect(() => {
     void load()
+    return () => {
+      loadSeqRef.current++ // invalidate in-flight results on unmount/dep change
+    }
   }, [load])
 
   useEffect(() => {
-    void listBusinessUnits().then(setBusinessUnits).catch(() => undefined)
+    let cancelled = false
+    void listBusinessUnits()
+      .then((units) => {
+        if (!cancelled) setBusinessUnits(units)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   return (

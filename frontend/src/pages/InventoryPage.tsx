@@ -58,8 +58,14 @@ export function InventoryPage() {
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Monotonic request id: only the newest in-flight load may write state,
+  // so a slow response (or a stale debounced search) can never overwrite
+  // fresher data or land after unmount.
+  const loadSeqRef = useRef(0)
+
   const load = useCallback(
     async (searchText: string) => {
+      const seq = ++loadSeqRef.current
       setLoading(true)
       setError(null)
       try {
@@ -70,12 +76,14 @@ export function InventoryPage() {
           status: statusFilter || undefined,
           search: searchText || undefined,
         })
+        if (seq !== loadSeqRef.current) return
         setItems(res.items)
         setTotal(res.total)
       } catch (err) {
+        if (seq !== loadSeqRef.current) return
         setError(err instanceof Error ? err.message : 'Could not load inventory.')
       } finally {
-        setLoading(false)
+        if (seq === loadSeqRef.current) setLoading(false)
       }
     },
     [selectedBuId, categoryFilter, statusFilter, supplierFilter],
@@ -83,13 +91,32 @@ export function InventoryPage() {
 
   useEffect(() => {
     void load(search)
+    return () => {
+      loadSeqRef.current++ // invalidate in-flight results on unmount/dep change
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load])
 
   useEffect(() => {
-    void listBusinessUnits().then(setBusinessUnits).catch(() => undefined)
-    void listCategories().then(setCategories).catch(() => undefined)
-    void listSuppliers().then(setSuppliers).catch(() => undefined)
+    let cancelled = false
+    void listBusinessUnits()
+      .then((units) => {
+        if (!cancelled) setBusinessUnits(units)
+      })
+      .catch(() => undefined)
+    void listCategories()
+      .then((cats) => {
+        if (!cancelled) setCategories(cats)
+      })
+      .catch(() => undefined)
+    void listSuppliers()
+      .then((rows) => {
+        if (!cancelled) setSuppliers(rows)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   function onSearchChange(value: string) {

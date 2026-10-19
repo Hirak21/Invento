@@ -6,8 +6,6 @@ from app.models.recipe import (
     RecipeUpdate,
     RecipeWithIngredients,
     RecipeIngredientIn,
-    RecipeIngredientOut,
-    _ingredient_out_from_doc,
 )
 from app.routers.deps import CurrentUser, DBDep
 from app.routers.deps import OwnerUser as OwnerDep
@@ -63,21 +61,8 @@ async def list_recipes_endpoint(
     business_unit_id: str | None = Query(default=None, description="Filter by business unit"),
     active: bool = Query(default=True, description="Filter by active status"),
 ) -> list[RecipeWithIngredients]:
-    recipes = await list_recipes(db, business_unit_id=business_unit_id, active=active)
-    result: list[RecipeWithIngredients] = []
-    for recipe_out in recipes:
-        recipe_oid = ObjectId(recipe_out.id)
-        ingredients: list[RecipeIngredientOut] = []
-        async for ing in db.recipe_ingredients.find({"recipe_id": recipe_oid}):
-            item = await db.inventory_items.find_one({"_id": ing["item_id"]})
-            if item is None:
-                continue
-            ingredients.append(_ingredient_out_from_doc(ing, item, recipe_out.id))
-        result.append(RecipeWithIngredients(
-            recipe=recipe_out,
-            ingredients=ingredients,
-        ))
-    return result
+    # Batched in the service (2 queries total, not 2 per recipe).
+    return await list_recipes(db, business_unit_id=business_unit_id, active=active)
 
 
 @router.get("/{recipe_id}", response_model=RecipeWithIngredients)

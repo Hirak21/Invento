@@ -1,5 +1,5 @@
 from bson import ObjectId
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from app.models.business_unit import BusinessUnitCreate, BusinessUnitOut, BusinessUnitUpdate
 from app.models.user import utc_now
@@ -24,8 +24,13 @@ def bu_out(doc: dict) -> BusinessUnitOut:
 
 
 @router.get("", response_model=list[BusinessUnitOut])
-async def list_business_units(db: DBDep, user: CurrentUser) -> list[BusinessUnitOut]:
-    cursor = db.business_units.find().sort("name", 1)
+async def list_business_units(
+    db: DBDep,
+    user: CurrentUser,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> list[BusinessUnitOut]:
+    cursor = db.business_units.find().sort("name", 1).skip(skip).limit(limit)
     return [bu_out(doc) async for doc in cursor]
 
 

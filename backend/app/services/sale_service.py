@@ -14,6 +14,7 @@ from app.services.recipe_service import get_recipe as get_recipe_full
 from app.utils.audit import log_audit
 from app.utils.errors import BusinessRuleError, ConflictError, ForbiddenError, NotFoundError
 from app.utils.money import money_to_str, parse_money
+from app.utils.tx_retry import run_in_transaction
 from app.utils.units import decimal_to_mongo, to_decimal_number
 
 
@@ -249,194 +250,201 @@ async def create_sale(
         "ingredient_consumption": [],
     }
 
+    async def _run(session: Any) -> Any:
+        # Re-runnable body: a transient-fault retry starts clean so an
+        # aborted attempt can never leave duplicated line entries behind.
+        doc["items"] = []
+        doc["ingredient_consumption"] = []
+        doc.pop("sale_number", None)
+        if stay_doc is not None:
+            fresh = await db.stays.find_one(
+                {"_id": stay_doc["_id"]}, session=session
+            )
+            if fresh is None or fresh.get("status") != "open":
+                raise BusinessRuleError(
+                    "This stay is not open. The guest may have checked out."
+                )
+
+        # Stock guard + item validation INSIDE the transaction so
+        # concurrent sales cannot both pass against stale balances.
+        # 1) Billable inventory lines (direct sale demand).
+        for key, line in sale_demand.items():
+            if not is_oid(key):
+                raise BusinessRuleError("One of the items does not exist.")
+            item = await db.inventory_items.find_one(
+                {"_id": oid(key)}, session=session
+            )
+            if item is None:
+                raise BusinessRuleError("One of the items does not exist.")
+            if not item.get("active", False):
+                raise BusinessRuleError(f"Item '{item['name']}' is inactive.")
+            if item["business_unit_id"] != payload.business_unit_id:
+                raise BusinessRuleError(
+                    f"Item '{item['name']}' does not belong to this business unit."
+                )
+            available = to_decimal_number(item.get("current_stock", 0))
+            need = Decimal(str(line["quantity"]))
+            if available < need:
+                raise BusinessRuleError(
+                    f"Insufficient stock for '{item['name']}': "
+                    f"have {available} {item['base_unit']}, need {line['quantity']}."
+                )
+            line_total = parse_money(line["unit_price"]) * need
+            doc["items"].append(
+                {
+                    "item_id": str(item["_id"]),
+                    "item_name": item["name"],
+                    "quantity": line["quantity"],
+                    "unit": item["base_unit"],
+                    "unit_price": line["unit_price"],
+                    "unit_cost": item.get("purchase_price"),
+                    "line_total": money_to_str(line_total),
+                    "recipe_line": False,
+                    "is_recipe": False,
+                }
+            )
+
+        # 2) Billable recipe lines (menu items). Item name/price are
+        # snapshotted so later menu edits never change past bills.
+        for rid, ref in recipe_refs.items():
+            recipe = recipes_by_id[rid]
+            line_total = parse_money(ref["unit_price"]) * Decimal(str(ref["quantity"]))
+            doc["items"].append(
+                {
+                    "item_id": rid,
+                    "item_name": recipe["name"],
+                    "quantity": ref["quantity"],
+                    "unit": "pcs",
+                    "unit_price": ref["unit_price"],
+                    "unit_cost": None,
+                    "line_total": money_to_str(line_total),
+                    "recipe_line": False,
+                    "is_recipe": True,
+                }
+            )
+
+        # 3) Stock guard for TOTAL demand (sale + ingredients) so an
+        # item both sold directly and consumed as an ingredient cannot
+        # pass each check separately and oversell combined.
+        # Decimal-safe: fractional canonical quantities (e.g. 0.500 kg
+        # converted from 500 g) compare exactly; no float drift.
+        for ing_key, needed in total_demand.items():
+            if not is_oid(ing_key):
+                raise BusinessRuleError("One of the items does not exist.")
+            item = await db.inventory_items.find_one(
+                {"_id": oid(ing_key)}, session=session
+            )
+            if item is None:
+                raise BusinessRuleError("One of the items does not exist.")
+            if not item.get("active", False):
+                raise BusinessRuleError(f"Item '{item['name']}' is inactive.")
+            if item["business_unit_id"] != payload.business_unit_id:
+                raise BusinessRuleError(
+                    f"Item '{item['name']}' does not belong to this business unit."
+                )
+            available = to_decimal_number(item.get("current_stock", 0))
+            if available < needed:
+                raise BusinessRuleError(
+                    f"Insufficient stock for '{item['name']}': "
+                    f"have {available} {item['base_unit']}, need {needed}."
+                )
+            # Snapshot the BOM-only portion (direct sale lines restore
+            # via their own path) for exact cancel-restore later.
+            if ing_key in ingredient_demand:
+                doc["ingredient_consumption"].append({
+                    "item_id": ing_key,
+                    "quantity": str(
+                        ingredient_demand[ing_key].quantize(Decimal("0.001"))
+                    ),
+                    "unit": item["base_unit"],
+                })
+
+        doc["sale_number"] = await _next_sale_number(db, session)
+        initial_status = doc["order_status"]
+        if initial_status == "PENDING":
+            doc["status_history"] = [
+                {"status": "PENDING", "at": sold_at, "by": actor_id, "by_username": actor_username}
+            ]
+        result = await db.sales.insert_one(doc, session=session)
+
+        # 4) Deduct direct sale demand and record one movement per line.
+        # Floating-point safe: round only for display, never storage —
+        # $inc uses exact Decimal128 via decimal_to_mongo.
+        for line in doc["items"]:
+            if line.get("is_recipe"):
+                continue  # ingredients carry the stock effect for recipes
+            dec = -Decimal(str(line["quantity"])).quantize(Decimal("0.001"))
+            await db.inventory_items.update_one(
+                {"_id": oid(line["item_id"])},
+                {
+                    "$inc": {"current_stock": decimal_to_mongo(dec)},
+                    "$set": {"updated_at": datetime.now(UTC)},
+                },
+                session=session,
+            )
+            item_for_movement = {
+                "_id": oid(line["item_id"]),
+                "business_unit_id": payload.business_unit_id,
+                "base_unit": line["unit"],
+            }
+            await record_movement(
+                db,
+                session,
+                item_doc=item_for_movement,
+                movement_type=MovementType.SALE,
+                quantity=line["quantity"],
+                reference_type="sale",
+                reference_id=str(result.inserted_id),
+                unit_cost=line.get("unit_cost"),
+                actor_id=actor_id,
+                actor_username=actor_username,
+                notes=f"Sale {doc['sale_number']}",
+            )
+
+        # 5) Deduct BOM ingredient demand (recipe sales) with movements.
+        # Exact-decimal $inc (Decimal128, never float) in base units.
+        for ing_key, needed in ingredient_demand.items():
+            ing_item = await db.inventory_items.find_one(
+                {"_id": oid(ing_key)}, session=session
+            )
+            if ing_item is None:  # re-validated above; belt and braces
+                raise BusinessRuleError("One of the items does not exist.")
+            dec = -needed.quantize(Decimal("0.001"))
+            await db.inventory_items.update_one(
+                {"_id": oid(ing_key)},
+                {
+                    "$inc": {"current_stock": decimal_to_mongo(dec)},
+                    "$set": {"updated_at": datetime.now(UTC)},
+                },
+                session=session,
+            )
+            await record_movement(
+                db,
+                session,
+                item_doc=ing_item,
+                movement_type=MovementType.SALE,
+                quantity=needed,
+                reference_type="sale",
+                reference_id=str(result.inserted_id),
+                unit_cost=ing_item.get("purchase_price"),
+                actor_id=actor_id,
+                actor_username=actor_username,
+                notes=(
+                    f"Sale {doc['sale_number']} (recipe: {doc['recipe_name']})"
+                    if doc.get("recipe_name")
+                    else f"Sale {doc['sale_number']}"
+                ),
+            )
+        return result.inserted_id
+
     try:
-        async with await db.client.start_session() as session:
-            async with session.start_transaction():
-                if stay_doc is not None:
-                    fresh = await db.stays.find_one(
-                        {"_id": stay_doc["_id"]}, session=session
-                    )
-                    if fresh is None or fresh.get("status") != "open":
-                        raise BusinessRuleError(
-                            "This stay is not open. The guest may have checked out."
-                        )
-
-                # Stock guard + item validation INSIDE the transaction so
-                # concurrent sales cannot both pass against stale balances.
-                # 1) Billable inventory lines (direct sale demand).
-                for key, line in sale_demand.items():
-                    if not is_oid(key):
-                        raise BusinessRuleError("One of the items does not exist.")
-                    item = await db.inventory_items.find_one(
-                        {"_id": oid(key)}, session=session
-                    )
-                    if item is None:
-                        raise BusinessRuleError("One of the items does not exist.")
-                    if not item.get("active", False):
-                        raise BusinessRuleError(f"Item '{item['name']}' is inactive.")
-                    if item["business_unit_id"] != payload.business_unit_id:
-                        raise BusinessRuleError(
-                            f"Item '{item['name']}' does not belong to this business unit."
-                        )
-                    available = to_decimal_number(item.get("current_stock", 0))
-                    need = Decimal(str(line["quantity"]))
-                    if available < need:
-                        raise BusinessRuleError(
-                            f"Insufficient stock for '{item['name']}': "
-                            f"have {available} {item['base_unit']}, need {line['quantity']}."
-                        )
-                    line_total = parse_money(line["unit_price"]) * need
-                    doc["items"].append(
-                        {
-                            "item_id": str(item["_id"]),
-                            "item_name": item["name"],
-                            "quantity": line["quantity"],
-                            "unit": item["base_unit"],
-                            "unit_price": line["unit_price"],
-                            "unit_cost": item.get("purchase_price"),
-                            "line_total": money_to_str(line_total),
-                            "recipe_line": False,
-                            "is_recipe": False,
-                        }
-                    )
-
-                # 2) Billable recipe lines (menu items). Item name/price are
-                # snapshotted so later menu edits never change past bills.
-                for rid, ref in recipe_refs.items():
-                    recipe = recipes_by_id[rid]
-                    line_total = parse_money(ref["unit_price"]) * Decimal(str(ref["quantity"]))
-                    doc["items"].append(
-                        {
-                            "item_id": rid,
-                            "item_name": recipe["name"],
-                            "quantity": ref["quantity"],
-                            "unit": "pcs",
-                            "unit_price": ref["unit_price"],
-                            "unit_cost": None,
-                            "line_total": money_to_str(line_total),
-                            "recipe_line": False,
-                            "is_recipe": True,
-                        }
-                    )
-
-                # 3) Stock guard for TOTAL demand (sale + ingredients) so an
-                # item both sold directly and consumed as an ingredient cannot
-                # pass each check separately and oversell combined.
-                # Decimal-safe: fractional canonical quantities (e.g. 0.500 kg
-                # converted from 500 g) compare exactly; no float drift.
-                for ing_key, needed in total_demand.items():
-                    if not is_oid(ing_key):
-                        raise BusinessRuleError("One of the items does not exist.")
-                    item = await db.inventory_items.find_one(
-                        {"_id": oid(ing_key)}, session=session
-                    )
-                    if item is None:
-                        raise BusinessRuleError("One of the items does not exist.")
-                    if not item.get("active", False):
-                        raise BusinessRuleError(f"Item '{item['name']}' is inactive.")
-                    if item["business_unit_id"] != payload.business_unit_id:
-                        raise BusinessRuleError(
-                            f"Item '{item['name']}' does not belong to this business unit."
-                        )
-                    available = to_decimal_number(item.get("current_stock", 0))
-                    if available < needed:
-                        raise BusinessRuleError(
-                            f"Insufficient stock for '{item['name']}': "
-                            f"have {available} {item['base_unit']}, need {needed}."
-                        )
-                    # Snapshot the BOM-only portion (direct sale lines restore
-                    # via their own path) for exact cancel-restore later.
-                    if ing_key in ingredient_demand:
-                        doc["ingredient_consumption"].append({
-                            "item_id": ing_key,
-                            "quantity": str(
-                                ingredient_demand[ing_key].quantize(Decimal("0.001"))
-                            ),
-                            "unit": item["base_unit"],
-                        })
-
-                doc["sale_number"] = await _next_sale_number(db, session)
-                initial_status = doc["order_status"]
-                if initial_status == "PENDING":
-                    doc["status_history"] = [
-                        {"status": "PENDING", "at": sold_at, "by": actor_id, "by_username": actor_username}
-                    ]
-                result = await db.sales.insert_one(doc, session=session)
-
-                # 4) Deduct direct sale demand and record one movement per line.
-                # Floating-point safe: round only for display, never storage —
-                # $inc uses exact Decimal128 via decimal_to_mongo.
-                for line in doc["items"]:
-                    if line.get("is_recipe"):
-                        continue  # ingredients carry the stock effect for recipes
-                    dec = -Decimal(str(line["quantity"])).quantize(Decimal("0.001"))
-                    await db.inventory_items.update_one(
-                        {"_id": oid(line["item_id"])},
-                        {
-                            "$inc": {"current_stock": decimal_to_mongo(dec)},
-                            "$set": {"updated_at": datetime.now(UTC)},
-                        },
-                        session=session,
-                    )
-                    item_for_movement = {
-                        "_id": oid(line["item_id"]),
-                        "business_unit_id": payload.business_unit_id,
-                        "base_unit": line["unit"],
-                    }
-                    await record_movement(
-                        db,
-                        session,
-                        item_doc=item_for_movement,
-                        movement_type=MovementType.SALE,
-                        quantity=line["quantity"],
-                        reference_type="sale",
-                        reference_id=str(result.inserted_id),
-                        unit_cost=line.get("unit_cost"),
-                        actor_id=actor_id,
-                        actor_username=actor_username,
-                        notes=f"Sale {doc['sale_number']}",
-                    )
-
-                # 5) Deduct BOM ingredient demand (recipe sales) with movements.
-                # Exact-decimal $inc (Decimal128, never float) in base units.
-                for ing_key, needed in ingredient_demand.items():
-                    ing_item = await db.inventory_items.find_one(
-                        {"_id": oid(ing_key)}, session=session
-                    )
-                    if ing_item is None:  # re-validated above; belt and braces
-                        raise BusinessRuleError("One of the items does not exist.")
-                    dec = -needed.quantize(Decimal("0.001"))
-                    await db.inventory_items.update_one(
-                        {"_id": oid(ing_key)},
-                        {
-                            "$inc": {"current_stock": decimal_to_mongo(dec)},
-                            "$set": {"updated_at": datetime.now(UTC)},
-                        },
-                        session=session,
-                    )
-                    await record_movement(
-                        db,
-                        session,
-                        item_doc=ing_item,
-                        movement_type=MovementType.SALE,
-                        quantity=needed,
-                        reference_type="sale",
-                        reference_id=str(result.inserted_id),
-                        unit_cost=ing_item.get("purchase_price"),
-                        actor_id=actor_id,
-                        actor_username=actor_username,
-                        notes=(
-                            f"Sale {doc['sale_number']} (recipe: {doc['recipe_name']})"
-                            if doc.get("recipe_name")
-                            else f"Sale {doc['sale_number']}"
-                        ),
-                    )
+        insert_id = await run_in_transaction(db, _run)
     except DuplicateKeyError:
         existing = await db.sales.find_one({"idempotency_key": payload.idempotency_key})
         if existing is None:
             raise ConflictError("Duplicate submission detected.") from None
         return existing, True
-    return {**doc, "_id": result.inserted_id}, False
+    return {**doc, "_id": insert_id}, False
 
 
 async def get_sale(db: AsyncIOMotorDatabase, sale_id: str) -> SaleOut:
@@ -527,82 +535,84 @@ async def update_sale_status(
         updates["cancelled_by"] = actor_id
         updates["cancelled_by_username"] = actor_username
 
-    try:
-        async with await db.client.start_session() as session:
-            async with session.start_transaction():
-                result = await db.sales.find_one_and_update(
-                    {"_id": sale["_id"], "order_status": current},
-                    {"$set": updates},
-                    return_document=ReturnDocument.AFTER,
+    async def _run(session: Any) -> Any:
+        result = await db.sales.find_one_and_update(
+            {"_id": sale["_id"], "order_status": current},
+            {"$set": updates},
+            return_document=ReturnDocument.AFTER,
+            session=session,
+        )
+        if result is None:
+            raise BusinessRuleError("Order status changed concurrently. Retry.")
+
+        if new_status == "CANCELLED":
+            # Restore stock exactly once for every non-recipe line.
+            for line in result.get("items", []):
+                if line.get("is_recipe"):
+                    continue
+                item = await db.inventory_items.find_one(
+                    {"_id": oid(line["item_id"])}, session=session
+                )
+                if item is None:
+                    continue
+                await db.inventory_items.update_one(
+                    {"_id": item["_id"]},
+                    {
+                        "$inc": {"current_stock": decimal_to_mongo(Decimal(str(line["quantity"])))},
+                        "$set": {"updated_at": now},
+                    },
                     session=session,
                 )
-                if result is None:
-                    raise BusinessRuleError("Order status changed concurrently. Retry.")
+                await record_movement(
+                    db,
+                    session,
+                    item_doc=item,
+                    movement_type=MovementType.ADJUSTMENT_IN,
+                    quantity=Decimal(str(line["quantity"])),
+                    reference_type="sale_cancel",
+                    reference_id=str(result["_id"]),
+                    unit_cost=item.get("purchase_price"),
+                    actor_id=actor_id,
+                    actor_username=actor_username,
+                    notes=f"Cancelled order {result.get('sale_number', '')}",
+                )
+            # Restore BOM consumption from the sale-time snapshot so a
+            # cancelled recipe order returns exactly what was deducted,
+            # even if the recipe was edited afterwards. Pre-conversion
+            # sales have no snapshot — their ingredients stay consumed
+            # (documented limitation, never silently rewritten).
+            for consumed in result.get("ingredient_consumption", []):
+                qty = to_decimal_number(consumed["quantity"])
+                item = await db.inventory_items.find_one(
+                    {"_id": oid(consumed["item_id"])}, session=session
+                )
+                if item is None:
+                    continue
+                await db.inventory_items.update_one(
+                    {"_id": item["_id"]},
+                    {
+                        "$inc": {"current_stock": decimal_to_mongo(qty)},
+                        "$set": {"updated_at": now},
+                    },
+                    session=session,
+                )
+                await record_movement(
+                    db,
+                    session,
+                    item_doc=item,
+                    movement_type=MovementType.ADJUSTMENT_IN,
+                    quantity=qty,
+                    reference_type="sale_cancel",
+                    reference_id=str(result["_id"]),
+                    unit_cost=item.get("purchase_price"),
+                    actor_id=actor_id,
+                    actor_username=actor_username,
+                    notes=f"Cancelled order {result.get('sale_number', '')} (recipe ingredient)",
+                )
+        return result
 
-                if new_status == "CANCELLED":
-                    # Restore stock exactly once for every non-recipe line.
-                    for line in result.get("items", []):
-                        if line.get("is_recipe"):
-                            continue
-                        item = await db.inventory_items.find_one(
-                            {"_id": oid(line["item_id"])}, session=session
-                        )
-                        if item is None:
-                            continue
-                        await db.inventory_items.update_one(
-                            {"_id": item["_id"]},
-                            {
-                                "$inc": {"current_stock": decimal_to_mongo(Decimal(str(line["quantity"])))},
-                                "$set": {"updated_at": now},
-                            },
-                            session=session,
-                        )
-                        await record_movement(
-                            db,
-                            session,
-                            item_doc=item,
-                            movement_type=MovementType.ADJUSTMENT_IN,
-                            quantity=Decimal(str(line["quantity"])),
-                            reference_type="sale_cancel",
-                            reference_id=str(result["_id"]),
-                            unit_cost=item.get("purchase_price"),
-                            actor_id=actor_id,
-                            actor_username=actor_username,
-                            notes=f"Cancelled order {result.get('sale_number', '')}",
-                        )
-                    # Restore BOM consumption from the sale-time snapshot so a
-                    # cancelled recipe order returns exactly what was deducted,
-                    # even if the recipe was edited afterwards. Pre-conversion
-                    # sales have no snapshot — their ingredients stay consumed
-                    # (documented limitation, never silently rewritten).
-                    for consumed in result.get("ingredient_consumption", []):
-                        qty = to_decimal_number(consumed["quantity"])
-                        item = await db.inventory_items.find_one(
-                            {"_id": oid(consumed["item_id"])}, session=session
-                        )
-                        if item is None:
-                            continue
-                        await db.inventory_items.update_one(
-                            {"_id": item["_id"]},
-                            {
-                                "$inc": {"current_stock": decimal_to_mongo(qty)},
-                                "$set": {"updated_at": now},
-                            },
-                            session=session,
-                        )
-                        await record_movement(
-                            db,
-                            session,
-                            item_doc=item,
-                            movement_type=MovementType.ADJUSTMENT_IN,
-                            quantity=qty,
-                            reference_type="sale_cancel",
-                            reference_id=str(result["_id"]),
-                            unit_cost=item.get("purchase_price"),
-                            actor_id=actor_id,
-                            actor_username=actor_username,
-                            notes=f"Cancelled order {result.get('sale_number', '')} (recipe ingredient)",
-                        )
+    try:
+        result = await run_in_transaction(db, _run)
     except DuplicateKeyError:
         raise ConflictError("Duplicate submission detected.") from None
 

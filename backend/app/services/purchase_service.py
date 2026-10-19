@@ -10,6 +10,7 @@ from app.models.purchase import PurchaseCreate, purchase_out_from_doc
 from app.services.ledger import is_oid, oid, parse_oid, record_movement
 from app.utils.errors import BusinessRuleError, ConflictError, NotFoundError
 from app.utils.money import parse_money, money_to_str
+from app.utils.tx_retry import run_in_transaction
 
 
 async def _next_purchase_number(db: Any, session: Any) -> str:
@@ -151,62 +152,67 @@ async def create_purchase(
         "status": "completed",
     }
 
+    async def _run(session: Any) -> Any:
+        # Re-runnable body: a transient-fault retry starts clean so an
+        # aborted attempt can never leave duplicated line entries behind.
+        doc["items"] = []
+        doc["purchase_number"] = await _next_purchase_number(db, session)
+        result = await db.purchases.insert_one(doc, session=session)
+
+        for line in item_docs:
+            item = line["doc"]
+            from decimal import Decimal as _Decimal2
+
+            _s, _g, _t = _line_math(line["unit_cost"], line["quantity"], float(line.get("gst_percent", 0) or 0))
+            line_subtotal = money_to_str(_s)
+            line_gst = money_to_str(_g)
+            line_total = money_to_str(_t)
+            doc["items"].append(
+                {
+                    "item_id": str(item["_id"]),
+                    "item_name": item["name"],
+                    "quantity": line["quantity"],
+                    "unit": item["base_unit"],
+                    "unit_cost": line["unit_cost"],
+                    "standard_purchase_price": line.get("item_purchase_price", item.get("purchase_price", "0")),
+                    "gst_percent": float(line.get("gst_percent", 0) or 0),
+                    "line_subtotal": line_subtotal,
+                    "gst_amount": line_gst,
+                    "line_total": line_total,
+                }
+            )
+            from app.utils.units import decimal_to_mongo as _d2m
+
+            await db.inventory_items.update_one(
+                {"_id": item["_id"]},
+                {
+                    "$inc": {"current_stock": _d2m(_Decimal2(str(line["quantity"])))},
+                    "$set": {"updated_at": datetime.now(UTC)},
+                },
+                session=session,
+            )
+            await record_movement(
+                db,
+                session,
+                item_doc=item,
+                movement_type=MovementType.PURCHASE,
+                quantity=line["quantity"],
+                reference_type="purchase",
+                reference_id=str(result.inserted_id),
+                unit_cost=line["unit_cost"],
+                actor_id=actor_id,
+                actor_username=actor_username,
+                notes=f"Purchase {doc['purchase_number']}",
+            )
+        await db.purchases.update_one(
+            {"_id": result.inserted_id},
+            {"$set": {"items": doc["items"]}},
+            session=session,
+        )
+        return result.inserted_id
+
     try:
-        async with await db.client.start_session() as session:
-            async with session.start_transaction():
-                doc["purchase_number"] = await _next_purchase_number(db, session)
-                result = await db.purchases.insert_one(doc, session=session)
-
-                for line in item_docs:
-                    item = line["doc"]
-                    from decimal import Decimal as _Decimal2
-
-                    _s, _g, _t = _line_math(line["unit_cost"], line["quantity"], float(line.get("gst_percent", 0) or 0))
-                    line_subtotal = money_to_str(_s)
-                    line_gst = money_to_str(_g)
-                    line_total = money_to_str(_t)
-                    doc["items"].append(
-                        {
-                            "item_id": str(item["_id"]),
-                            "item_name": item["name"],
-                            "quantity": line["quantity"],
-                            "unit": item["base_unit"],
-                            "unit_cost": line["unit_cost"],
-                            "standard_purchase_price": line.get("item_purchase_price", item.get("purchase_price", "0")),
-                            "gst_percent": float(line.get("gst_percent", 0) or 0),
-                            "line_subtotal": line_subtotal,
-                            "gst_amount": line_gst,
-                            "line_total": line_total,
-                        }
-                    )
-                    from app.utils.units import decimal_to_mongo as _d2m
-
-                    await db.inventory_items.update_one(
-                        {"_id": item["_id"]},
-                        {
-                            "$inc": {"current_stock": _d2m(_Decimal2(str(line["quantity"])))},
-                            "$set": {"updated_at": datetime.now(UTC)},
-                        },
-                        session=session,
-                    )
-                    await record_movement(
-                        db,
-                        session,
-                        item_doc=item,
-                        movement_type=MovementType.PURCHASE,
-                        quantity=line["quantity"],
-                        reference_type="purchase",
-                        reference_id=str(result.inserted_id),
-                        unit_cost=line["unit_cost"],
-                        actor_id=actor_id,
-                        actor_username=actor_username,
-                        notes=f"Purchase {doc['purchase_number']}",
-                    )
-                await db.purchases.update_one(
-                    {"_id": result.inserted_id},
-                    {"$set": {"items": doc["items"]}},
-                    session=session,
-                )
+        insert_id = await run_in_transaction(db, _run)
     except DuplicateKeyError:
         # Transaction has unwound by now; same idempotency key was processed
         # earlier — return the original purchase with no further stock effect.
@@ -214,7 +220,7 @@ async def create_purchase(
         if existing is None:
             raise ConflictError("Duplicate submission detected.") from None
         return existing, True
-    return {**doc, "_id": result.inserted_id}, False
+    return {**doc, "_id": insert_id}, False
 
 
 async def get_purchase(db: AsyncIOMotorDatabase, purchase_id: str) -> dict[str, Any]:

@@ -26,6 +26,9 @@ async def clean_db():
     # Motor clients bind to the event loop they are created on;
     # pytest-asyncio gives each test a new loop, so reset per test.
     reset_mongo_client()
+    from app.utils.rate_limit import login_limiter
+
+    login_limiter.reset()  # in-memory failed-login counters are cross-test
     db = get_mongo_client()[TEST_DB_NAME]
     await db.client.drop_database(TEST_DB_NAME)
     await ensure_indexes(db)

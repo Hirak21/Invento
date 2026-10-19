@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/Input'
 import { XMarkIcon } from '@/components/icons'
 import { useBusinessUnit } from '@/hooks/useBusinessUnit'
 import { listItems } from '@/services/masterData'
-import { addRecipeIngredient, createRecipe, getCompatibleUnits, removeRecipeIngredient, updateRecipe } from '@/services/recipes'
+import { createRecipe, getCompatibleUnits, updateRecipe } from '@/services/recipes'
 import type { RecipeWithIngredients } from '@/types/recipe'
 import type { BusinessUnit } from '@/types/master'
 
@@ -174,6 +174,15 @@ export function RecipeFormModal({ open, onClose, onSaved, initial, businessUnits
 
     setSaving(true)
     try {
+      // One request per save: the backend swaps the whole BOM inside the
+      // same transaction as the scalar fields (create or edit), so a failed
+      // save can never leave a half-written recipe behind.
+      const payloadIngredients = ingredients.map((ing) => ({
+        item_id: ing.item_id,
+        quantity: ing.quantity,
+        unit: ing.unit,
+        notes: ing.notes || undefined,
+      }))
       let recipeId: string
       if (isEditing) {
         const updated = await updateRecipe(initial!.recipe.id, {
@@ -181,16 +190,9 @@ export function RecipeFormModal({ open, onClose, onSaved, initial, businessUnits
           description: description.trim() || null,
           active,
           selling_price: sellingPrice || null,
+          ingredients: payloadIngredients,
         })
         recipeId = updated.recipe.id
-        // Remove existing lines and re-add the edited set.
-        for (const ing of initial!.ingredients) {
-          try {
-            await removeRecipeIngredient(initial!.recipe.id, ing.id)
-          } catch {
-            // ignore — line may already be gone
-          }
-        }
       } else {
         const created = await createRecipe({
           name: name.trim(),
@@ -198,17 +200,9 @@ export function RecipeFormModal({ open, onClose, onSaved, initial, businessUnits
           description: description.trim() || undefined,
           active,
           selling_price: sellingPrice || undefined,
+          ingredients: payloadIngredients,
         })
         recipeId = created.recipe.id
-      }
-
-      for (const ing of ingredients) {
-        await addRecipeIngredient(recipeId, {
-          item_id: ing.item_id,
-          quantity: ing.quantity,
-          unit: ing.unit,
-          notes: ing.notes || undefined,
-        })
       }
 
       onSaved(recipeId)

@@ -36,6 +36,9 @@ export function updateRecipe(
     active?: boolean
     selling_price?: string | null
     category_id?: string | null
+    /** Full BOM replacement — applied in the same transaction as the scalar
+     *  patch (all-or-nothing). Omit to leave the BOM untouched. */
+    ingredients?: { item_id: string; quantity: number; unit?: string; notes?: string }[]
   },
 ): Promise<RecipeWithIngredients> {
   return apiFetch<RecipeWithIngredients>(`/recipes/${id}`, { method: 'PATCH', body: patch })

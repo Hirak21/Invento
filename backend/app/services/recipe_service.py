@@ -20,6 +20,7 @@ from app.services.ledger import is_oid, oid
 from app.utils.errors import BusinessRuleError, NotFoundError, ConflictError
 from app.models.user import utc_now
 from app.utils.money import parse_money
+from app.utils.tx_retry import run_in_transaction
 from app.utils.units import (
     IncompatibleUnitError,
     compatible_units,
@@ -55,6 +56,11 @@ async def _require_item_in_bu(
     item = await db.inventory_items.find_one({"_id": oid(item_id)})
     if item is None:
         raise NotFoundError("Item not found.")
+    return _check_item_in_bu(item, business_unit_id)
+
+
+def _check_item_in_bu(item: dict[str, Any], business_unit_id: str) -> dict[str, Any]:
+    """Item eligibility checks shared by lookup and pre-batched paths."""
     if item.get("active", True) is False:
         raise BusinessRuleError(f"Item '{item['name']}' is inactive.")
     if item["business_unit_id"] != business_unit_id:
@@ -86,8 +92,12 @@ async def _ingredient_doc(
     payload: RecipeIngredientIn,
     *,
     index: int | None = None,
+    item: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    item = await _require_item_in_bu(db, payload.item_id, business_unit_id)
+    if item is None:
+        item = await _require_item_in_bu(db, payload.item_id, business_unit_id)
+    else:
+        _check_item_in_bu(item, business_unit_id)
     entered_qty, entered_unit = _validate_ingredient_payload(payload, index=index)
     base_unit = item["base_unit"]
     effective_unit = entered_unit or base_unit
@@ -108,27 +118,54 @@ async def _ingredient_doc(
     }
 
 
-async def _recipe_cost(db: AsyncIOMotorDatabase, recipe_oid: Any) -> str:
-    lines: list[dict[str, Any]] = []
-    async for ing in db.recipe_ingredients.find({"recipe_id": recipe_oid}):
-        item = await db.inventory_items.find_one({"_id": ing["item_id"]})
-        if item is None:
-            continue
-        lines.append({
+async def _ingredients_with_items(
+    db: AsyncIOMotorDatabase, recipe_oids: list[Any]
+) -> dict[Any, list[tuple[dict[str, Any], dict[str, Any]]]]:
+    """Batch-load (ingredient, item) pairs for many recipes in two queries.
+
+    Replaces the per-ingredient ``find_one`` on inventory_items (N+1) that
+    previously ran once per line per recipe. Ingredients whose item no
+    longer exists are dropped, matching the old skip-if-missing behaviour.
+    """
+    grouped: dict[Any, list[tuple[dict[str, Any], dict[str, Any]]]] = {
+        roid: [] for roid in recipe_oids
+    }
+    if not recipe_oids:
+        return grouped
+    ings = await db.recipe_ingredients.find({"recipe_id": {"$in": recipe_oids}}).to_list(None)
+    if not ings:
+        return grouped
+    item_ids = {ing["item_id"] for ing in ings}
+    items = await db.inventory_items.find({"_id": {"$in": list(item_ids)}}).to_list(None)
+    items_by_id = {item["_id"]: item for item in items}
+    for ing in ings:
+        item = items_by_id.get(ing["item_id"])
+        if item is not None:
+            grouped[ing["recipe_id"]].append((ing, item))
+    return grouped
+
+
+def _cost_lines(pairs: list[tuple[dict[str, Any], dict[str, Any]]]) -> list[dict[str, Any]]:
+    return [
+        {
             "quantity": to_decimal_number(ing["quantity"]),
             "purchase_price": item.get("purchase_price") or "0.00",
-        })
-    return recipe_cost_from_lines(lines)
+        }
+        for ing, item in pairs
+    ]
+
+
+async def _recipe_cost(db: AsyncIOMotorDatabase, recipe_oid: Any) -> str:
+    pairs = (await _ingredients_with_items(db, [recipe_oid]))[recipe_oid]
+    return recipe_cost_from_lines(_cost_lines(pairs))
 
 
 async def _full_recipe(db: AsyncIOMotorDatabase, recipe: dict[str, Any]) -> RecipeWithIngredients:
-    ingredients: list[RecipeIngredientOut] = []
-    async for ing in db.recipe_ingredients.find({"recipe_id": recipe["_id"]}):
-        item = await db.inventory_items.find_one({"_id": ing["item_id"]})
-        if item is None:
-            continue
-        ingredients.append(_ingredient_out_from_doc(ing, item, str(recipe["_id"])))
-    cost = await _recipe_cost(db, recipe["_id"])
+    pairs = (await _ingredients_with_items(db, [recipe["_id"]]))[recipe["_id"]]
+    ingredients = [
+        _ingredient_out_from_doc(ing, item, str(recipe["_id"])) for ing, item in pairs
+    ]
+    cost = recipe_cost_from_lines(_cost_lines(pairs))
     return RecipeWithIngredients(
         recipe=_recipe_out_from_doc(recipe, estimated_cost=cost),
         ingredients=ingredients,
@@ -235,14 +272,26 @@ async def list_recipes(
     *,
     business_unit_id: str | None = None,
     active: bool = True,
-) -> list[dict[str, Any]]:
+) -> list[RecipeWithIngredients]:
+    """All matching recipes with full BOMs, batched (no per-recipe queries)."""
     query: dict[str, Any] = {"active": active}
     if business_unit_id and is_oid(business_unit_id):
         query["business_unit_id"] = business_unit_id
-    out: list[dict[str, Any]] = []
-    async for doc in db.recipes.find(query).sort("name", 1):
-        cost = await _recipe_cost(db, doc["_id"])
-        out.append(_recipe_out_from_doc(doc, estimated_cost=cost))
+    docs = await db.recipes.find(query).sort("name", 1).to_list(None)
+    grouped = await _ingredients_with_items(db, [doc["_id"] for doc in docs])
+    out: list[RecipeWithIngredients] = []
+    for doc in docs:
+        pairs = grouped.get(doc["_id"], [])
+        ingredients = [
+            _ingredient_out_from_doc(ing, item, str(doc["_id"])) for ing, item in pairs
+        ]
+        cost = recipe_cost_from_lines(_cost_lines(pairs))
+        out.append(
+            RecipeWithIngredients(
+                recipe=_recipe_out_from_doc(doc, estimated_cost=cost),
+                ingredients=ingredients,
+            )
+        )
     return out
 
 
@@ -289,16 +338,66 @@ async def update_recipe(
             raise BusinessRuleError("Category not found.")
         updates["category_id"] = payload.category_id
 
-    if not updates:
+    # New BOM (optional): validate every line BEFORE the transaction so a
+    # bad line can never leave a half-replaced recipe behind.
+    new_ing_docs: list[dict[str, Any]] | None = None
+    if payload.ingredients is not None:
+        seen: set[str] = set()
+        for idx, line in enumerate(payload.ingredients):
+            if not is_oid(line.item_id):
+                raise BusinessRuleError(f"Ingredient {idx + 1}: item not found.")
+            key = str(oid(line.item_id))
+            if key in seen:
+                raise ConflictError(
+                    "Duplicate ingredient lines are not allowed: "
+                    "each stock item may appear only once per recipe."
+                )
+            seen.add(key)
+        target_bu = payload.business_unit_id or recipe["business_unit_id"]
+        found = await db.inventory_items.find(
+            {"_id": {"$in": [oid(k) for k in seen]}}
+        ).to_list(len(seen))
+        found_by_id = {item["_id"]: item for item in found}
+        new_ing_docs = []
+        for idx, line in enumerate(payload.ingredients):
+            item = found_by_id.get(oid(line.item_id))
+            if item is None:
+                raise NotFoundError("Item not found.")
+            new_ing_docs.append(
+                await _ingredient_doc(
+                    db, recipe["_id"], target_bu, line, index=idx, item=item
+                )
+            )
+
+    if not updates and new_ing_docs is None:
         return recipe
 
     updates["updated_at"] = utc_now()
-    try:
-        await db.recipes.update_one({"_id": recipe["_id"]}, {"$set": updates})
-    except DuplicateKeyError:
-        raise ConflictError(
-            "A recipe with that name already exists in this business unit."
-        ) from None
+
+    async def _apply(session: Any) -> None:
+        try:
+            await db.recipes.update_one(
+                {"_id": recipe["_id"]}, {"$set": updates}, session=session
+            )
+        except DuplicateKeyError:
+            raise ConflictError(
+                "A recipe with that name already exists in this business unit."
+            ) from None
+        if new_ing_docs is not None:
+            # Atomic BOM swap: old lines out, new lines in, same transaction.
+            await db.recipe_ingredients.delete_many(
+                {"recipe_id": recipe["_id"]}, session=session
+            )
+            try:
+                await db.recipe_ingredients.insert_many(new_ing_docs, session=session)
+            except DuplicateKeyError:
+                raise ConflictError(
+                    "Duplicate ingredient lines are not allowed: "
+                    "each stock item may appear only once per recipe."
+                ) from None
+
+    await run_in_transaction(db, _apply)
+
     updated = await db.recipes.find_one({"_id": recipe["_id"]})
     assert updated is not None
     return updated

@@ -81,7 +81,14 @@ export function ExpensesPage() {
     }
   }, [searchParams, setSearchParams])
 
+  // Per-callback request ids: only the newest in-flight load may write
+  // state, so a slow response can never overwrite fresher data (or land
+  // after unmount).
+  const loadSeqRef = useRef(0)
+  const loadDueSeqRef = useRef(0)
+
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current
     setLoading(true)
     try {
       const res = await listExpenses({
@@ -90,17 +97,20 @@ export function ExpensesPage() {
         from: dateFrom || undefined,
         to: dateTo || undefined,
       })
+      if (seq !== loadSeqRef.current) return
       setRecords(res.records)
       setTotalAmount(res.total_amount)
       setError(null)
     } catch (err) {
+      if (seq !== loadSeqRef.current) return
       setError(err instanceof Error ? err.message : 'Could not load expenses.')
     } finally {
-      setLoading(false)
+      if (seq === loadSeqRef.current) setLoading(false)
     }
   }, [selectedBuId, categoryFilter, dateFrom, dateTo])
 
   const loadDue = useCallback(async () => {
+    const seq = ++loadDueSeqRef.current
     setDueLoading(true)
     setDueError(null)
     try {
@@ -111,11 +121,13 @@ export function ExpensesPage() {
         from: dateFrom || undefined,
         to: dateTo || undefined,
       })
+      if (seq !== loadDueSeqRef.current) return
       setPendingExpenses(res.records)
     } catch (err) {
+      if (seq !== loadDueSeqRef.current) return
       setDueError(err instanceof Error ? err.message : 'Could not load outstanding dues.')
     } finally {
-      setDueLoading(false)
+      if (seq === loadDueSeqRef.current) setDueLoading(false)
     }
   }, [selectedBuId, categoryFilter, dateFrom, dateTo])
 
@@ -140,19 +152,29 @@ export function ExpensesPage() {
 
   useEffect(() => {
     void load()
+    return () => {
+      loadSeqRef.current++ // invalidate in-flight results on unmount/dep change
+    }
   }, [load])
 
   useEffect(() => {
     void loadDue()
+    return () => {
+      loadDueSeqRef.current++
+    }
   }, [loadDue])
 
   // Category selector is server-driven (Settings can add custom categories).
   useEffect(() => {
+    let cancelled = false
     void listExpenseCategories()
       .then((cats) => {
-        if (cats.length > 0) setCategories(cats)
+        if (!cancelled && cats.length > 0) setCategories(cats)
       })
       .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   async function handleSubmit(event: FormEvent) {

@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { useAliveRef } from '@/hooks/useAliveRef'
 import { useAuth } from '@/hooks/useAuth'
 import { createSupplier, listSuppliers, updateSupplier } from '@/services/masterData'
 import type { Supplier } from '@/types/master'
@@ -10,6 +11,7 @@ import type { Supplier } from '@/types/master'
 export function SuppliersPanel() {
   const { user } = useAuth()
   const isOwner = user?.role === 'owner'
+  const alive = useAliveRef()
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [loading, setLoading] = useState(true)
   const [name, setName] = useState('')
@@ -20,8 +22,11 @@ export function SuppliersPanel() {
   async function reload() {
     setLoading(true)
     try {
-      setSuppliers(await listSuppliers(true))
+      const rows = await listSuppliers(true)
+      if (!alive.current) return
+      setSuppliers(rows)
     } catch (err) {
+      if (!alive.current) return
       setError(err instanceof Error ? err.message : 'Could not load suppliers.')
     } finally {
       setLoading(false)

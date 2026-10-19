@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { useAliveRef } from '@/hooks/useAliveRef'
 import { useAuth } from '@/hooks/useAuth'
 import { createBusinessUnit, listBusinessUnits, updateBusinessUnit } from '@/services/masterData'
 import type { BusinessUnit } from '@/types/master'
@@ -10,6 +11,7 @@ import type { BusinessUnit } from '@/types/master'
 export function BusinessUnitsPanel() {
   const { user } = useAuth()
   const isOwner = user?.role === 'owner'
+  const alive = useAliveRef()
   const [units, setUnits] = useState<BusinessUnit[]>([])
   const [loading, setLoading] = useState(true)
   const [name, setName] = useState('')
@@ -23,8 +25,11 @@ export function BusinessUnitsPanel() {
   async function reload() {
     setLoading(true)
     try {
-      setUnits(await listBusinessUnits())
+      const rows = await listBusinessUnits()
+      if (!alive.current) return
+      setUnits(rows)
     } catch (err) {
+      if (!alive.current) return
       setError(err instanceof Error ? err.message : 'Could not load business units.')
     } finally {
       setLoading(false)

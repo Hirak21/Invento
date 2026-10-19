@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
@@ -15,7 +15,13 @@ export function StockAlertsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // Monotonic request id: only the newest in-flight load may write state,
+  // so a slow response can never overwrite fresher data (or land after
+  // unmount).
+  const loadSeqRef = useRef(0)
+
   const loadAlerts = useCallback(async () => {
+    const seq = ++loadSeqRef.current
     setLoading(true)
     setError(null)
     try {
@@ -23,16 +29,21 @@ export function StockAlertsPage() {
         business_unit_id: selectedBuId || undefined,
         include_out_of_stock: true,
       })
+      if (seq !== loadSeqRef.current) return
       setAlerts(data)
     } catch (err) {
+      if (seq !== loadSeqRef.current) return
       setError(err instanceof Error ? err.message : 'Could not load stock alerts.')
     } finally {
-      setLoading(false)
+      if (seq === loadSeqRef.current) setLoading(false)
     }
   }, [selectedBuId])
 
   useEffect(() => {
     void loadAlerts()
+    return () => {
+      loadSeqRef.current++ // invalidate in-flight results on unmount/dep change
+    }
   }, [loadAlerts])
 
   const outOfStock = alerts.filter((a) => a.status === 'out')

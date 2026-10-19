@@ -46,9 +46,11 @@ async def list_categories(
     db: DBDep,
     user: CurrentUser,
     include_inactive: bool = Query(default=False),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=200, ge=1, le=500),
 ) -> list[CategoryOut]:
     query = {} if include_inactive else {"active": True}
-    cursor = db.categories.find(query).sort("name", 1)
+    cursor = db.categories.find(query).sort("name", 1).skip(skip).limit(limit)
     return [category_out(doc) async for doc in cursor]
 
 
@@ -117,9 +119,11 @@ async def list_suppliers(
     db: DBDep,
     user: CurrentUser,
     include_inactive: bool = Query(default=False),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=200, ge=1, le=500),
 ) -> list[SupplierOut]:
     query = {} if include_inactive else {"active": True}
-    cursor = db.suppliers.find(query).sort("name", 1)
+    cursor = db.suppliers.find(query).sort("name", 1).skip(skip).limit(limit)
     return [supplier_out(doc) async for doc in cursor]
 
 

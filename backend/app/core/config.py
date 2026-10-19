@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     # Visible business rule: max |delta| a staff user may adjust in one correction.
     staff_adjustment_limit: int = 10
 
+    # Failed-login throttle (per client IP): block further login attempts
+    # after `login_rate_limit` bad password/unknown-user responses inside
+    # `login_rate_limit_window_seconds`. In-memory per process (single
+    # instance MVP); a restart clears the counters.
+    login_rate_limit: int = 5
+    login_rate_limit_window_seconds: int = 300
+
 
 @lru_cache
 def get_settings() -> Settings:

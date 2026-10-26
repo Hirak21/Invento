@@ -438,11 +438,13 @@ def compute_report_totals(
 def build_report_pdf(data: dict[str, Any]) -> bytes:
     """Invento — Executive Summary (A4 portrait).
 
-    Spec layout: title + period/BU subtitles, METRICS SUMMARY (wastage as a
-    non-cash memo), OPERATIONAL COUNTS, then newest-first sales transactions.
-    Every page carries the summary footer with "Page X of Y". Long item
-    names wrap (Paragraph) — never truncated. All money uses the shared
-    Indian-grouping formatter (format_inr).
+    Layout: page 1 is a clean executive summary (title + period/BU subtitles,
+    METRICS SUMMARY with wastage as a non-cash memo, OPERATIONAL COUNTS);
+    a page break separates it from the newest-first sales transactions that
+    follow. Type is sized for on-screen viewing and print/PDF download
+    (min ~8pt). Every page carries the summary footer with "Page X of Y".
+    Long item names wrap (Paragraph) — never truncated. All money uses the
+    shared Indian-grouping formatter (format_inr).
     """
     from xml.sax.saxutils import escape as xml_escape
 
@@ -451,7 +453,15 @@ def build_report_pdf(data: dict[str, Any]) -> bytes:
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import mm
     from reportlab.pdfgen import canvas as pdf_canvas
-    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab.platypus import (
+        HRFlowable,
+        PageBreak,
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
 
     sales = data["sales"]
     purchases = data["purchases"]
@@ -490,7 +500,7 @@ def build_report_pdf(data: dict[str, Any]) -> bytes:
             for state in self._saved_states:
                 self.__dict__.update(state)
                 self.saveState()
-                self.setFont("Helvetica", 7)
+                self.setFont("Helvetica", 8)
                 self.setFillColor(colors.HexColor("#6B7280"))
                 self.drawString(margin, 10 * mm, "Invento — Executive Summary")
                 self.drawRightString(
@@ -510,14 +520,14 @@ def build_report_pdf(data: dict[str, Any]) -> bytes:
         title="Invento — Executive Summary",
     )
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("RTitle", parent=styles["Title"], fontSize=16, spaceAfter=2)
-    sub_style = ParagraphStyle("RSub", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#4B5563"), spaceAfter=1)
-    note_style = ParagraphStyle("RNote", parent=styles["Normal"], fontSize=7, textColor=colors.HexColor("#6B7280"), spaceAfter=6)
-    h2 = ParagraphStyle("RH2", parent=styles["Heading2"], fontSize=11, spaceBefore=8, spaceAfter=4)
-    cell_style = ParagraphStyle("RCell", parent=styles["Normal"], fontSize=7, leading=9)
-    cell_small = ParagraphStyle("RCellSm", parent=styles["Normal"], fontSize=6.5, leading=8)
+    title_style = ParagraphStyle("RTitle", parent=styles["Title"], fontSize=20, leading=24, spaceAfter=4)
+    sub_style = ParagraphStyle("RSub", parent=styles["Normal"], fontSize=10, leading=13, textColor=colors.HexColor("#4B5563"), spaceAfter=2)
+    note_style = ParagraphStyle("RNote", parent=styles["Normal"], fontSize=9, leading=12, textColor=colors.HexColor("#6B7280"), spaceAfter=6)
+    h2 = ParagraphStyle("RH2", parent=styles["Heading2"], fontSize=13, leading=16, spaceBefore=10, spaceAfter=5)
+    cell_style = ParagraphStyle("RCell", parent=styles["Normal"], fontSize=9, leading=12)
+    cell_small = ParagraphStyle("RCellSm", parent=styles["Normal"], fontSize=8, leading=10)
     cell_right = ParagraphStyle("RCellR", parent=cell_style, alignment=2)
-    head_style = ParagraphStyle("RHead", parent=styles["Normal"], fontSize=7, leading=9, textColor=colors.white, fontName="Helvetica-Bold")
+    head_style = ParagraphStyle("RHead", parent=styles["Normal"], fontSize=9, leading=12, textColor=colors.white, fontName="Helvetica-Bold")
 
     def P(text: Any, right: bool = False) -> Paragraph:
         return Paragraph(str(text if text != "" else "—"), cell_right if right else cell_style)
@@ -552,10 +562,10 @@ def build_report_pdf(data: dict[str, Any]) -> bytes:
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("GRID", (0, 0), (-1, -1), 0.4, grid),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
-            ("TOPPADDING", (0, 0), (-1, -1), 3),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-            ("LEFTPADDING", (0, 0), (-1, -1), 4),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
         ]))
         return t
 
@@ -573,7 +583,10 @@ def build_report_pdf(data: dict[str, Any]) -> bytes:
         sub_style,
     ))
     story.append(Paragraph(f"Business Unit: {bu_title}", sub_style))
-    story.append(Spacer(1, 4))
+    story.append(HRFlowable(
+        width="100%", thickness=0.8, color=dark,
+        spaceBefore=4, spaceAfter=2,
+    ))
 
     metric_rows = [
         ["Gross sales", R(inr(totals["gross"]))],
@@ -617,6 +630,9 @@ def build_report_pdf(data: dict[str, Any]) -> bytes:
     story.append(Paragraph("OPERATIONAL COUNTS", h2))
     story.append(styled_table(["Count", "Value"], count_rows, [0.70, 0.30]))
 
+    # Executive summary owns page 1; detail rows start on a fresh page.
+    story.append(PageBreak())
+
     story.append(Paragraph(f"SALES ({len(sales)}) — RECENT TRANSACTIONS", h2))
     if sales:
         rows = []
@@ -634,7 +650,7 @@ def build_report_pdf(data: dict[str, Any]) -> bytes:
             ])
         story.append(styled_table(
             ["Sale #", "Timestamp", "Business Unit", "Items", "Subtotal", "Discount"],
-            rows, [0.13, 0.13, 0.13, 0.32, 0.145, 0.145],
+            rows, [0.12, 0.15, 0.13, 0.30, 0.15, 0.15],
         ))
     else:
         story.append(Paragraph("No sales found for this period.", cell_style))
